@@ -1,4 +1,4 @@
-import type { Cargo, Equipe, TipoAfastamento } from '../types/ferias';
+import type { Cargo, Equipe } from '../types/ferias';
 
 export const ANO_EXERCICIO = 2027;
 export const MESES_VEDADOS = [1, 2, 12] as const; // Janeiro, Fevereiro, Dezembro
@@ -46,7 +46,6 @@ export function normalizarEquipe(valor: string): Equipe {
   if (limpo === 'delta') return 'Delta';
   if (limpo === 'volante') return 'Volante';
   if (limpo === 'coordenacao' || limpo === 'coord') return 'Coordenação';
-  if (limpo.includes('terceiriz')) return 'Terceirizado';
   return 'Alfa';
 }
 
@@ -59,69 +58,7 @@ export function normalizarCargo(valor: string): Cargo {
 
   if (limpo.includes('delegad')) return 'Delegado';
   if (limpo.includes('escriv')) return 'Escrivão';
-  if (limpo.includes('terceiriz')) return 'Terceirizado';
   return 'Agente';
-}
-
-export function ehTerceirizado(equipe: Equipe, cargo?: Cargo): boolean {
-  return equipe === 'Terceirizado' || cargo === 'Terceirizado';
-}
-
-export function formatarLotacao(equipe: Equipe, cargo: Cargo): string {
-  if (equipe === 'Terceirizado' && cargo === 'Terceirizado') {
-    return 'Terceirizado';
-  }
-  return `${equipe} · ${cargo}`;
-}
-
-export function normalizarTipoAfastamento(valor: string | undefined | null): TipoAfastamento {
-  const limpo = String(valor ?? '')
-    .trim()
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '');
-
-  if (!limpo || limpo.includes('feria')) return 'Férias';
-  if (
-    limpo.includes('premio') ||
-    limpo.includes('licenca premio') ||
-    limpo.includes('licenca-premio') ||
-    /\blp\b/.test(limpo)
-  ) {
-    return 'Licença-Prêmio';
-  }
-  if (
-    limpo.includes('curso') ||
-    limpo.includes('convoc') ||
-    limpo.includes('capacit') ||
-    limpo.includes('trein') ||
-    limpo.includes('seminario') ||
-    limpo.includes('instrucao')
-  ) {
-    return 'Curso/Convocação';
-  }
-  if (
-    limpo.includes('medic') ||
-    limpo.includes('lts') ||
-    limpo.includes('ltf') ||
-    limpo.includes('saude') ||
-    limpo.includes('atestado') ||
-    limpo.includes('doenca') ||
-    limpo.includes('tratamento')
-  ) {
-    return 'Afastamento Médico (LTS/LTF)';
-  }
-  return 'Férias';
-}
-
-export function addDaysToISODate(isoDate: string, deltaDays: number): string {
-  const ms = isoParaUTCMillis(isoDate);
-  if (ms === null) return '';
-  const d = new Date(ms + deltaDays * 86400000);
-  const y = d.getUTCFullYear();
-  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(d.getUTCDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
 }
 
 /**
@@ -310,12 +247,10 @@ export function calcularPosicaoNoAno2027(
 }
 
 /**
- * Extracts all distinct calendar years touched by leave periods across records.
+ * Extracts all distinct calendar years touched by vacation periods across records.
  */
 export function extrairAnosDosRegistros(
   registros: {
-    inicio?: string;
-    fim?: string;
     inicio1?: string;
     fim1?: string;
     inicio2?: string;
@@ -336,7 +271,6 @@ export function extrairAnosDosRegistros(
     }
   };
   for (const r of registros) {
-    addSpan(r.inicio, r.fim);
     addSpan(r.inicio1, r.fim1);
     addSpan(r.inicio2, r.fim2);
   }

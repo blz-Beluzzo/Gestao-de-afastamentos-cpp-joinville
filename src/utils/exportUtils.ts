@@ -1,6 +1,5 @@
-import type { LancamentoAvaliado } from '../types/ferias';
+import type { RegistroAvaliado } from '../types/ferias';
 import { formatarDataBR } from './dateUtils';
-import { getLeaveVisualStyle } from './leaveStyles';
 
 function escapeCsvCell(val: string | number): string {
   const str = String(val ?? '');
@@ -10,37 +9,47 @@ function escapeCsvCell(val: string | number): string {
   return str;
 }
 
-export function exportToCSV(
-  lancamentos: LancamentoAvaliado[],
-  fileName = 'Controle_Afastamentos_CPP_Joinville.csv'
-) {
+export function exportToCSV(registros: RegistroAvaliado[], fileName = 'Programacao_Ferias_CPP_2027.csv') {
   const headers = [
     'Equipe',
     'Servidor',
     'Cargo',
-    'Tipo de Afastamento',
-    'Início',
-    'Fim',
-    'Dias',
+    'Início – período 1',
+    'Fim – período 1',
+    'Dias – período 1',
+    'Início – período 2',
+    'Fim – período 2',
+    'Dias – período 2',
+    'Total de dias',
     'Situação',
     'Detalhamento de Conflitos',
   ];
 
-  const rows = lancamentos.map((r) =>
-    [
+  const rows = registros.map((r) => {
+    const conflitos: string[] = [];
+    if (r.periodo1Avaliado && !r.periodo1Avaliado.validacao.valido) {
+      conflitos.push(`P1: ${r.periodo1Avaliado.validacao.mensagem}`);
+    }
+    if (r.periodo2Avaliado && !r.periodo2Avaliado.validacao.valido) {
+      conflitos.push(`P2: ${r.periodo2Avaliado.validacao.mensagem}`);
+    }
+    return [
       r.equipe,
       r.servidor,
       r.cargo,
-      r.tipo,
-      formatarDataBR(r.inicio),
-      formatarDataBR(r.fim),
-      r.dias || '',
-      r.validacao.valido ? 'Regular' : 'Conflito',
-      r.validacao.valido ? '' : r.validacao.mensagem,
+      formatarDataBR(r.inicio1),
+      formatarDataBR(r.fim1),
+      r.dias1 || '',
+      formatarDataBR(r.inicio2),
+      formatarDataBR(r.fim2),
+      r.dias2 || '',
+      r.totalDias,
+      r.temConflito ? 'Conflito' : 'Válido',
+      conflitos.join(' | '),
     ]
       .map(escapeCsvCell)
-      .join(';')
-  );
+      .join(';');
+  });
 
   const csvContent = '\uFEFF' + [headers.join(';'), ...rows].join('\n');
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -63,27 +72,37 @@ function escapeHtml(text: string): string {
 }
 
 export function exportToStandaloneHTML(
-  lancamentos: LancamentoAvaliado[],
-  fileName = 'Relatorio_Afastamentos_CPP_Joinville.html'
+  registros: RegistroAvaliado[],
+  fileName = 'Relatorio_Ferias_CPP_Joinville_2027.html'
 ) {
-  const totalConflitos = lancamentos.filter((r) => !r.validacao.valido).length;
-  const rowsHtml = lancamentos
+  const totalConflitos = registros.filter((r) => r.temConflito).length;
+  const rowsHtml = registros
     .map((r) => {
-      const hasConflict = !r.validacao.valido;
-      const periodoText = r.inicio
-        ? `${formatarDataBR(r.inicio)} a ${formatarDataBR(r.fim)}`
+      const p1Conflict = r.periodo1Avaliado && !r.periodo1Avaliado.validacao.valido;
+      const p2Conflict = r.periodo2Avaliado && !r.periodo2Avaliado.validacao.valido;
+      const p1Text = r.inicio1
+        ? `${formatarDataBR(r.inicio1)} a ${formatarDataBR(r.fim1)} (${r.dias1}d)`
         : '—';
-      const style = getLeaveVisualStyle(r.tipo);
+      const p2Text = r.inicio2
+        ? `${formatarDataBR(r.inicio2)} a ${formatarDataBR(r.fim2)} (${r.dias2}d)`
+        : '—';
+
+      const obs = [
+        p1Conflict ? `P1: ${r.periodo1Avaliado!.validacao.mensagem}` : '',
+        p2Conflict ? `P2: ${r.periodo2Avaliado!.validacao.mensagem}` : '',
+      ]
+        .filter(Boolean)
+        .join(' • ');
 
       return `
       <tr>
         <td>${escapeHtml(r.equipe)}</td>
         <td><strong>${escapeHtml(r.servidor)}</strong></td>
         <td>${escapeHtml(r.cargo)}</td>
-        <td class="${hasConflict ? 'cell-conflict' : style.htmlCellClass}">${escapeHtml(r.tipo)}</td>
-        <td class="num">${escapeHtml(periodoText)}</td>
-        <td class="num">${r.dias}</td>
-        <td>${hasConflict ? `<span class="err">${escapeHtml(r.validacao.mensagem)}</span>` : '<span class="ok">Regular</span>'}</td>
+        <td class="${p1Conflict ? 'cell-conflict' : r.inicio1 ? 'cell-valid' : ''}">${escapeHtml(p1Text)}</td>
+        <td class="${p2Conflict ? 'cell-conflict' : r.inicio2 ? 'cell-valid' : ''}">${escapeHtml(p2Text)}</td>
+        <td class="num">${r.totalDias}</td>
+        <td>${obs ? `<span class="err">${escapeHtml(obs)}</span>` : '<span class="ok">Regular</span>'}</td>
       </tr>`;
     })
     .join('');
@@ -92,7 +111,7 @@ export function exportToStandaloneHTML(
 <html lang="pt-BR">
 <head>
 <meta charset="utf-8" />
-<title>Controle de Afastamentos - CPP Joinville</title>
+<title>Programação de Férias — CPP Joinville (2027)</title>
 <style>
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #0F172A; background: #F8FAFC; margin: 32px; }
   h1 { color: #1E3A5F; font-size: 20px; margin-bottom: 4px; }
@@ -101,27 +120,24 @@ export function exportToStandaloneHTML(
   th { background: #1E3A5F; color: #FFF; text-align: left; padding: 10px 12px; font-weight: 600; }
   td { padding: 9px 12px; border-bottom: 1px solid #E2E8F0; vertical-align: top; }
   .num { font-variant-numeric: tabular-nums; text-align: right; font-weight: 600; }
-  .cell-ferias { background: #FEF9C3; color: #422006; font-weight: 600; }
-  .cell-licenca { background: #DBEAFE; color: #1E3A8A; font-weight: 600; }
-  .cell-curso { background: #EDE9FE; color: #4C1D95; font-weight: 600; }
-  .cell-medico { background: #D1FAE5; color: #064E3B; font-weight: 600; }
-  .cell-conflict { background: #FEE2E2; color: #991B1B; font-weight: 600; }
+  .cell-valid { background: #FEF9C3; color: #422006; font-variant-numeric: tabular-nums; }
+  .cell-conflict { background: #FEE2E2; color: #991B1B; font-variant-numeric: tabular-nums; font-weight: 600; }
   .ok { color: #15803D; font-weight: 600; }
   .err { color: #991B1B; font-size: 12px; }
 </style>
 </head>
 <body>
-  <h1>Controle de Afastamentos - CPP Joinville</h1>
-  <p class="meta">Total de lançamentos: ${lancamentos.length} · Lançamentos com pendência/conflito: ${totalConflitos} · Gerado em ${new Date().toLocaleDateString('pt-BR')}</p>
+  <h1>Programação de Férias — CPP Joinville (2027)</h1>
+  <p class="meta">Total de servidores: ${registros.length} · Servidores com pendência/conflito: ${totalConflitos} · Gerado em ${new Date().toLocaleDateString('pt-BR')}</p>
   <table>
     <thead>
       <tr>
         <th>Equipe</th>
         <th>Servidor</th>
         <th>Cargo</th>
-        <th>Tipo de Afastamento</th>
-        <th style="text-align:right">Período</th>
-        <th style="text-align:right">Dias</th>
+        <th>1º Período</th>
+        <th>2º Período</th>
+        <th style="text-align:right">Total (dias)</th>
         <th>Validação Operacional</th>
       </tr>
     </thead>

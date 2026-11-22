@@ -1,83 +1,42 @@
 import React, { useState } from 'react';
 import { AlertTriangle, Pencil, Plus } from 'lucide-react';
-import type { LancamentoAvaliado, ServidorAgrupado } from '../types/ferias';
+import type { PeriodoAvaliado, RegistroAvaliado } from '../types/ferias';
 import {
   ANO_EXERCICIO,
   calcularPosicaoNoAno,
   formatarDataBR,
   formatarDataCurtaBR,
-  formatarLotacao,
   MESES_VEDADOS,
   NOMES_MESES_CURTOS,
   obterDiasDoMes,
   obterDiasNoAno,
-  periodosSeSobrepoem,
 } from '../utils/dateUtils';
-import { CONFLICT_BLOCK_CLASS, getLeaveVisualStyle } from '../utils/leaveStyles';
 
 interface AnnualTimelineProps {
-  registros: ServidorAgrupado[];
+  registros: RegistroAvaliado[];
   ano?: number;
-  title?: string;
-  sectionAriaLabel?: string;
-  emptyTitle?: string;
-  emptySubtitle?: string;
-  emptyActionLabel?: string;
   onSelectAno?: (ano: number) => void;
   highlightedRecordId?: string | null;
   highlightedServidorName?: string | null;
-  onEditLancamento: (lancamento: LancamentoAvaliado) => void;
-  onCreateNewForOfficer?: (servidor: ServidorAgrupado) => void;
+  onEditPeriod: (registro: RegistroAvaliado, periodo?: 1 | 2) => void;
   onCreateNew: () => void;
 }
 
 interface ActiveTooltipState {
-  reg: ServidorAgrupado;
-  periodo: LancamentoAvaliado;
+  reg: RegistroAvaliado;
+  periodo: PeriodoAvaliado;
   top: number;
   left: number;
   placeBelow: boolean;
 }
 
-function assignLanes(periodos: LancamentoAvaliado[]): {
-  laneById: Map<string, number>;
-  laneCount: number;
-} {
-  const laneEnds: string[] = [];
-  const laneById = new Map<string, number>();
-
-  for (const p of periodos) {
-    let assigned = -1;
-    for (let i = 0; i < laneEnds.length; i++) {
-      if (!periodosSeSobrepoem(p.inicio, p.fim, laneEnds[i], laneEnds[i]) && p.inicio > laneEnds[i]) {
-        assigned = i;
-        laneEnds[i] = p.fim;
-        break;
-      }
-    }
-    if (assigned === -1) {
-      assigned = laneEnds.length;
-      laneEnds.push(p.fim);
-    }
-    laneById.set(p.id, assigned);
-  }
-
-  return { laneById, laneCount: Math.max(1, laneEnds.length) };
-}
-
 export const AnnualTimeline: React.FC<AnnualTimelineProps> = ({
   registros,
   ano = ANO_EXERCICIO,
-  title = 'Servidor / Lotação',
-  sectionAriaLabel,
-  emptyTitle = 'Nenhum servidor encontrado com os filtros selecionados.',
-  emptySubtitle = 'Ajuste os filtros de equipe, cargo, tipo ou busca, ou cadastre um novo afastamento.',
-  emptyActionLabel = 'Novo Afastamento',
   onSelectAno,
   highlightedRecordId,
   highlightedServidorName,
-  onEditLancamento,
-  onCreateNewForOfficer,
+  onEditPeriod,
   onCreateNew,
 }) => {
   const [activeTooltip, setActiveTooltip] = useState<ActiveTooltipState | null>(
@@ -101,14 +60,13 @@ export const AnnualTimeline: React.FC<AnnualTimelineProps> = ({
   React.useEffect(() => {
     const target = registros.find(
       (r) =>
-        (highlightedRecordId &&
-          r.periodos.some((p) => p.id === highlightedRecordId)) ||
+        (highlightedRecordId && r.id === highlightedRecordId) ||
         (highlightedServidorName &&
           r.servidor.trim().toLowerCase() ===
             highlightedServidorName.trim().toLowerCase())
     );
-    if (target && rowRefs.current[target.key]) {
-      rowRefs.current[target.key]?.scrollIntoView({
+    if (target && rowRefs.current[target.id]) {
+      rowRefs.current[target.id]?.scrollIntoView({
         behavior: 'smooth',
         block: 'center',
       });
@@ -117,66 +75,35 @@ export const AnnualTimeline: React.FC<AnnualTimelineProps> = ({
 
   if (registros.length === 0) {
     return (
-      <section
-        aria-label={sectionAriaLabel ?? title}
-        className="bg-white border border-slate-200 rounded-lg overflow-hidden"
-      >
-        <div className="overflow-x-auto">
-          <div className="min-w-[1000px]">
-            <div className="flex border-b border-slate-200 bg-slate-50/90 text-xs font-semibold text-slate-700">
-              <div className="w-[195px] sm:w-[260px] shrink-0 px-3 sm:px-4 py-3 border-r border-slate-200 sticky left-0 bg-slate-50 z-20 flex items-center justify-between">
-                <span>{title}</span>
-                <span className="font-mono text-[11px] text-slate-500">{ano}</span>
-              </div>
-
-              <div className="flex-1 flex">
-                {mesesLargurasPct.map((m) => (
-                  <div
-                    key={m.mes}
-                    style={{ width: `${m.widthPct}%` }}
-                    className={`py-2.5 text-center border-r border-slate-200 last:border-r-0 ${
-                      m.vedado ? 'bg-vedado-hatch text-slate-600' : 'text-slate-800'
-                    }`}
-                  >
-                    <div>{m.nome}</div>
-                    {m.vedado && (
-                      <div className="text-[10px] font-normal text-slate-500 leading-tight">
-                        Vedado
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
+      <div className="bg-white border border-slate-200 rounded-lg p-10 text-center space-y-3">
+        <p className="text-sm font-medium text-slate-800">
+          Nenhum servidor encontrado com os filtros selecionados.
+        </p>
+        <p className="text-xs text-slate-500">
+          Ajuste os filtros de equipe, cargo ou busca, ou cadastre um novo lançamento de férias.
+        </p>
+        <div className="pt-1">
+          <button
+            type="button"
+            onClick={onCreateNew}
+            className="inline-flex items-center gap-2 px-4 py-2 text-xs font-medium text-white bg-[#1E3A5F] rounded-md hover:bg-[#162D4A] transition-colors"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Novo Lançamento</span>
+          </button>
         </div>
-
-        <div className="p-8 text-center space-y-2.5">
-          <p className="text-sm font-medium text-slate-800">{emptyTitle}</p>
-          <p className="text-xs text-slate-500">{emptySubtitle}</p>
-          <div className="pt-1">
-            <button
-              type="button"
-              onClick={onCreateNew}
-              className="inline-flex items-center gap-2 px-4 py-2 text-xs font-medium text-white bg-[#1E3A5F] rounded-md hover:bg-[#162D4A] transition-colors"
-            >
-              <Plus className="w-4 h-4" />
-              <span>{emptyActionLabel}</span>
-            </button>
-          </div>
-        </div>
-      </section>
+      </div>
     );
   }
 
   const showTooltipForTarget = (
     el: HTMLElement,
-    reg: ServidorAgrupado,
-    periodo: LancamentoAvaliado
+    reg: RegistroAvaliado,
+    periodo: PeriodoAvaliado
   ) => {
     const rect = el.getBoundingClientRect();
-    const tooltipWidth = 320;
-    const placeBelow = rect.top < 230;
+    const tooltipWidth = 310;
+    const placeBelow = rect.top < 220;
     const rawLeft = rect.left + rect.width / 2 - tooltipWidth / 2;
     const maxLeft =
       typeof window !== 'undefined' ? window.innerWidth - tooltipWidth - 16 : rawLeft;
@@ -192,92 +119,64 @@ export const AnnualTimeline: React.FC<AnnualTimelineProps> = ({
   };
 
   const renderPeriodoBlock = (
-    reg: ServidorAgrupado,
-    periodo: LancamentoAvaliado,
-    laneIndex: number,
-    laneCount: number
+    reg: RegistroAvaliado,
+    periodo: PeriodoAvaliado
   ) => {
     const pos = calcularPosicaoNoAno(periodo.inicio, periodo.fim, ano);
     if (!pos.visivel) return null;
 
+    const key = `${reg.id}-p${periodo.numero}`;
     const isConflict = !periodo.validacao.valido;
-    const leaveStyle = getLeaveVisualStyle(periodo.tipo);
-
-    const visualWidthPct = Math.max(pos.widthPct, 1.8);
-    const visualLeftPct = Math.min(pos.leftPct, 100 - visualWidthPct);
-
-    const isTiny = visualWidthPct < 2.8;
-    const isMedium = visualWidthPct >= 2.8 && visualWidthPct < 8.5;
 
     const labelCompacto =
-      pos.widthPct >= 11 && periodo.tipo !== 'Férias'
-        ? `${leaveStyle.shortLabel} · ${formatarDataCurtaBR(periodo.inicio)}–${formatarDataCurtaBR(periodo.fim)}`
-        : pos.widthPct >= 8.5
+      pos.widthPct >= 8.5
         ? `${formatarDataCurtaBR(periodo.inicio)}–${formatarDataCurtaBR(periodo.fim)}`
         : `${periodo.dias}d`;
 
-    const laneHeightPct = 100 / laneCount;
-    const topPct = laneIndex * laneHeightPct;
-
     return (
       <div
-        key={periodo.id}
-        style={{
-          left: `${visualLeftPct}%`,
-          width: `${visualWidthPct}%`,
-          top: laneCount > 1 ? `calc(${topPct}% + 3px)` : '6px',
-          height: laneCount > 1 ? `calc(${laneHeightPct}% - 6px)` : 'calc(100% - 12px)',
-        }}
-        className="absolute z-10"
+        key={key}
+        style={{ left: `${pos.leftPct}%`, width: `${pos.widthPct}%` }}
+        className="absolute top-1.5 bottom-1.5 z-10"
       >
         <button
           type="button"
           onClick={() => {
             setActiveTooltip(null);
-            onEditLancamento(periodo);
+            onEditPeriod(reg, periodo.numero);
           }}
           onMouseEnter={(e) => showTooltipForTarget(e.currentTarget, reg, periodo)}
           onMouseLeave={() => setActiveTooltip(null)}
           onFocus={(e) => showTooltipForTarget(e.currentTarget, reg, periodo)}
           onBlur={() => setActiveTooltip(null)}
-          aria-label={`${reg.servidor}, ${periodo.tipo} de ${formatarDataBR(
+          aria-label={`${reg.servidor}, ${periodo.numero}º período de ${formatarDataBR(
             periodo.inicio
           )} a ${formatarDataBR(periodo.fim)}, ${
-            isConflict ? `em conflito: ${periodo.validacao.mensagem}` : 'regular'
+            isConflict ? `em conflito: ${periodo.validacao.mensagem}` : 'válido'
           }. Clique para editar ou excluir.`}
-          className={`w-full h-full rounded flex items-center justify-center font-mono tabular-nums font-semibold border transition-transform duration-150 overflow-hidden focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[#1E3A5F] ${
-            isTiny
-              ? 'px-0 text-[9px] tracking-tighter gap-0'
-              : isMedium
-              ? 'px-0.5 text-[10px] gap-0.5'
-              : 'px-1.5 text-[11px] gap-1'
-          } ${isConflict ? CONFLICT_BLOCK_CLASS : leaveStyle.blockClass}`}
+          className={`w-full h-full rounded px-1 flex items-center justify-center gap-1 text-[11px] font-mono tabular-nums font-semibold border transition-transform duration-150 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[#1E3A5F] ${
+            isConflict
+              ? 'bg-[#FEE2E2] hover:bg-[#FECACA] border-[#DC2626] text-[#991B1B]'
+              : 'bg-[#FACC15] hover:bg-[#EAB308] border-[#CA8A04] text-[#422006]'
+          }`}
         >
-          {isConflict && !isTiny && (
-            <AlertTriangle
-              className={`${isMedium ? 'w-2.5 h-2.5' : 'w-3 h-3'} shrink-0 text-[#DC2626]`}
-              aria-hidden="true"
-            />
+          {isConflict && (
+            <AlertTriangle className="w-3 h-3 shrink-0 text-[#DC2626]" aria-hidden="true" />
           )}
-          <span className={`whitespace-nowrap ${pos.widthPct >= 8.5 ? 'truncate' : ''}`}>
-            {labelCompacto}
-          </span>
+          <span className="whitespace-nowrap">{labelCompacto}</span>
         </button>
       </div>
     );
   };
 
   return (
-    <section
-      aria-label={sectionAriaLabel ?? title}
-      className="bg-white border border-slate-200 rounded-lg overflow-hidden relative"
-    >
+    <div className="bg-white border border-slate-200 rounded-lg overflow-hidden relative">
       <div className="overflow-x-auto">
         <div className="min-w-[1000px]">
           {/* Header row */}
           <div className="flex border-b border-slate-200 bg-slate-50/90 text-xs font-semibold text-slate-700">
-            <div className="w-[195px] sm:w-[260px] shrink-0 px-3 sm:px-4 py-3 border-r border-slate-200 sticky left-0 bg-slate-50 z-20 flex items-center justify-between">
-              <span>{title}</span>
+            <div className="w-[185px] sm:w-[250px] shrink-0 px-3 sm:px-4 py-3 border-r border-slate-200 sticky left-0 bg-slate-50 z-20 flex items-center justify-between">
+              <span>Servidor / Lotação</span>
               <span className="font-mono text-[11px] text-slate-500">{ano}</span>
             </div>
 
@@ -299,134 +198,120 @@ export const AnnualTimeline: React.FC<AnnualTimelineProps> = ({
                 </div>
               ))}
             </div>
+
+            <div className="w-[72px] shrink-0 px-3 py-3 border-l border-slate-200 text-right">
+              Dias
+            </div>
           </div>
 
           {/* Officer rows */}
           <div className="divide-y divide-slate-200">
             {registros.map((reg) => {
               const isHighlighted = Boolean(
-                (highlightedRecordId &&
-                  reg.periodos.some((p) => p.id === highlightedRecordId)) ||
+                (highlightedRecordId && reg.id === highlightedRecordId) ||
                   (highlightedServidorName &&
                     reg.servidor.trim().toLowerCase() ===
                       highlightedServidorName.trim().toLowerCase())
               );
 
-              const periodosNoAno = reg.periodos.filter(
-                (p) => calcularPosicaoNoAno(p.inicio, p.fim, ano).visivel
-              );
-              const { laneById, laneCount } = assignLanes(periodosNoAno);
-              const rowMinHeight = laneCount > 1 ? laneCount * 36 + 8 : 48;
-
               return (
+              <div
+                key={reg.id}
+                ref={(el) => {
+                  rowRefs.current[reg.id] = el;
+                }}
+                className={`flex items-stretch transition-colors group ${
+                  isHighlighted
+                    ? 'bg-sky-50/90 ring-2 ring-inset ring-[#1E3A5F]'
+                    : 'hover:bg-slate-50/60'
+                }`}
+              >
+                {/* Sticky left officer info */}
                 <div
-                  key={reg.key}
-                  ref={(el) => {
-                    rowRefs.current[reg.key] = el;
-                  }}
-                  className={`flex items-stretch transition-colors group ${
+                  className={`w-[185px] sm:w-[250px] shrink-0 px-3 sm:px-4 py-2.5 border-r border-slate-200 sticky left-0 z-20 flex items-center justify-between gap-2 ${
                     isHighlighted
-                      ? 'bg-sky-50/90 ring-2 ring-inset ring-[#1E3A5F]'
-                      : 'hover:bg-slate-50/60'
+                      ? 'bg-sky-50'
+                      : 'bg-white group-hover:bg-slate-50/95'
                   }`}
                 >
-                  {/* Sticky left officer info */}
-                  <div
-                    className={`w-[195px] sm:w-[260px] shrink-0 px-3 sm:px-4 py-2.5 border-r border-slate-200 sticky left-0 z-20 flex items-center justify-between gap-2 ${
-                      isHighlighted
-                        ? 'bg-sky-50'
-                        : 'bg-white group-hover:bg-slate-50/95'
-                    }`}
-                  >
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-xs sm:text-sm font-medium text-slate-900 truncate">
-                          {reg.servidor}
-                        </span>
-                        {reg.temConflito && (
-                          <AlertTriangle
-                            className="w-3.5 h-3.5 text-red-600 shrink-0"
-                            aria-label="Possui conflito"
-                          />
-                        )}
-                      </div>
-                      <div className="text-[11px] sm:text-xs text-slate-500 truncate">
-                        {formatarLotacao(reg.equipe, reg.cargo)}
-                      </div>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs sm:text-sm font-medium text-slate-900 truncate">
+                        {reg.servidor}
+                      </span>
+                      {reg.temConflito && (
+                        <AlertTriangle
+                          className="w-3.5 h-3.5 text-red-600 shrink-0"
+                          aria-label="Possui conflito"
+                        />
+                      )}
                     </div>
-                    <div className="flex items-center gap-0.5 shrink-0">
-                      {onCreateNewForOfficer && (
-                        <button
-                          type="button"
-                          onClick={() => onCreateNewForOfficer(reg)}
-                          aria-label={`Adicionar afastamento para ${reg.servidor}`}
-                          title={`Adicionar afastamento para ${reg.servidor}`}
-                          className="p-1.5 rounded text-slate-400 hover:text-[#1E3A5F] hover:bg-slate-100 transition-colors"
-                        >
-                          <Plus className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                      {reg.periodos[0] && (
-                        <button
-                          type="button"
-                          onClick={() => onEditLancamento(reg.periodos[0])}
-                          aria-label={`Editar afastamentos de ${reg.servidor}`}
-                          title={`Editar afastamentos de ${reg.servidor}`}
-                          className="p-1.5 rounded text-slate-400 hover:text-[#1E3A5F] hover:bg-slate-100 transition-colors"
-                        >
-                          <Pencil className="w-3.5 h-3.5" />
-                        </button>
-                      )}
+                    <div className="text-[11px] sm:text-xs text-slate-500 truncate">
+                      {reg.equipe} · {reg.cargo}
                     </div>
                   </div>
-
-                  {/* 12-month timeline track */}
-                  <div
-                    className="flex-1 relative"
-                    style={{ minHeight: `${rowMinHeight}px` }}
+                  <button
+                    type="button"
+                    onClick={() => onEditPeriod(reg)}
+                    aria-label={`Editar férias de ${reg.servidor}`}
+                    className="p-1.5 rounded text-slate-400 hover:text-[#1E3A5F] hover:bg-slate-100 transition-colors shrink-0"
                   >
-                    {/* Background month grid lines + hatched restricted months */}
-                    <div className="absolute inset-0 flex pointer-events-none">
-                      {mesesLargurasPct.map((m) => (
-                        <div
-                          key={m.mes}
-                          style={{ width: `${m.widthPct}%` }}
-                          className={`h-full border-r border-slate-100 last:border-r-0 ${
-                            m.vedado ? 'bg-vedado-hatch' : ''
-                          }`}
-                        />
-                      ))}
-                    </div>
+                    <Pencil className="w-3.5 h-3.5" />
+                  </button>
+                </div>
 
-                    {/* Period blocks */}
-                    {periodosNoAno.map((p) =>
-                      renderPeriodoBlock(reg, p, laneById.get(p.id) ?? 0, laneCount)
-                    )}
+                {/* 12-month timeline track */}
+                <div className="flex-1 relative min-h-[48px]">
+                  {/* Background month grid lines + hatched restricted months */}
+                  <div className="absolute inset-0 flex pointer-events-none">
+                    {mesesLargurasPct.map((m) => (
+                      <div
+                        key={m.mes}
+                        style={{ width: `${m.widthPct}%` }}
+                        className={`h-full border-r border-slate-100 last:border-r-0 ${
+                          m.vedado ? 'bg-vedado-hatch' : ''
+                        }`}
+                      />
+                    ))}
+                  </div>
 
-                    {/* Fallback buttons when periods belong to a different calendar year than `ano` */}
-                    {periodosNoAno.length === 0 && reg.periodos.length > 0 && (
-                      <div className="relative z-10 h-full flex items-center flex-wrap gap-2 px-3 py-1.5">
-                        {reg.periodos.map((p) => {
+                  {/* Period blocks */}
+                  {reg.periodo1Avaliado &&
+                    renderPeriodoBlock(reg, reg.periodo1Avaliado)}
+                  {reg.periodo2Avaliado &&
+                    renderPeriodoBlock(reg, reg.periodo2Avaliado)}
+
+                  {/* Fallback chips when periods belong to a different calendar year than `ano` */}
+                  {(() => {
+                    const foraDoAno = [reg.periodo1Avaliado, reg.periodo2Avaliado].filter(
+                      (p): p is PeriodoAvaliado =>
+                        Boolean(p && !calcularPosicaoNoAno(p.inicio, p.fim, ano).visivel)
+                    );
+                    if (foraDoAno.length === 0) return null;
+                    return (
+                      <div className="relative z-10 h-full flex items-center gap-2 px-3 py-1.5">
+                        {foraDoAno.map((p) => {
                           const periodoAno = Number(p.inicio.slice(0, 4));
                           const isConflict = !p.validacao.valido;
-                          const leaveStyle = getLeaveVisualStyle(p.tipo);
                           return (
                             <button
-                              key={`${p.id}-off`}
+                              key={`${reg.id}-off-${p.numero}`}
                               type="button"
                               onClick={() => {
                                 if (onSelectAno && periodoAno >= 2000) {
                                   onSelectAno(periodoAno);
                                 } else {
-                                  onEditLancamento(p);
+                                  onEditPeriod(reg, p.numero);
                                 }
                               }}
                               className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-mono tabular-nums font-medium border transition-colors ${
-                                isConflict ? CONFLICT_BLOCK_CLASS : leaveStyle.blockClass
+                                isConflict
+                                  ? 'bg-[#FEE2E2] hover:bg-[#FECACA] border-[#DC2626] text-[#991B1B]'
+                                  : 'bg-[#FEF9C3] hover:bg-[#FEF08A] border-[#CA8A04] text-[#422006]'
                               }`}
                             >
                               <span>
-                                {leaveStyle.shortLabel}: {formatarDataBR(p.inicio)}–{formatarDataBR(p.fim)} ({p.dias}d)
+                                {p.numero}º: {formatarDataBR(p.inicio)}–{formatarDataBR(p.fim)} ({p.dias}d)
                               </span>
                               {onSelectAno && periodoAno >= 2000 && (
                                 <span className="underline font-sans font-semibold">
@@ -437,16 +322,22 @@ export const AnnualTimeline: React.FC<AnnualTimelineProps> = ({
                           );
                         })}
                       </div>
-                    )}
-                  </div>
+                    );
+                  })()}
                 </div>
+
+                {/* Right day total */}
+                <div className="w-[72px] shrink-0 px-3 py-2.5 border-l border-slate-200 flex items-center justify-end gap-1 font-mono tabular-nums text-xs font-medium text-slate-700">
+                  <span>{reg.totalDias}d</span>
+                </div>
+              </div>
               );
             })}
           </div>
         </div>
       </div>
 
-      {/* Fixed-position tooltip */}
+      {/* Fixed-position portal-like tooltip so it is never clipped by overflow containers */}
       {activeTooltip && (
         <div
           role="tooltip"
@@ -455,7 +346,7 @@ export const AnnualTimeline: React.FC<AnnualTimelineProps> = ({
             left: `${activeTooltip.left}px`,
             transform: activeTooltip.placeBelow ? 'none' : 'translateY(-100%)',
           }}
-          className={`fixed w-[320px] p-3 rounded-md shadow-xl border text-xs leading-relaxed pointer-events-none z-50 bg-white text-slate-900 ${
+          className={`fixed w-[310px] p-3 rounded-md shadow-xl border text-xs leading-relaxed pointer-events-none z-50 bg-white text-slate-900 ${
             activeTooltip.periodo.validacao.valido
               ? 'border-slate-300'
               : 'border-red-300'
@@ -466,20 +357,12 @@ export const AnnualTimeline: React.FC<AnnualTimelineProps> = ({
               {activeTooltip.reg.servidor}
             </span>
             <span className="text-[11px] text-slate-500 shrink-0">
-              {formatarLotacao(activeTooltip.reg.equipe, activeTooltip.reg.cargo)}
+              {activeTooltip.reg.equipe} · {activeTooltip.reg.cargo}
             </span>
           </div>
 
-          <div className="flex items-center gap-2 text-[11px] font-semibold text-slate-800 mb-1">
-            <span
-              className={`inline-block w-2.5 h-2.5 rounded-sm border shrink-0 ${
-                getLeaveVisualStyle(activeTooltip.periodo.tipo).swatchClass
-              }`}
-            />
-            <span>{activeTooltip.periodo.tipo}</span>
-          </div>
-
           <div className="font-mono tabular-nums text-[11px] text-slate-700 mb-1.5">
+            {activeTooltip.periodo.numero}º Período:{' '}
             {formatarDataBR(activeTooltip.periodo.inicio)} a{' '}
             {formatarDataBR(activeTooltip.periodo.fim)} (
             {activeTooltip.periodo.dias} dia
@@ -500,15 +383,15 @@ export const AnnualTimeline: React.FC<AnnualTimelineProps> = ({
             </div>
           ) : (
             <div className="text-[11px] text-emerald-800 bg-emerald-50 border border-emerald-200 rounded px-2 py-1">
-              Afastamento regular, sem conflitos operacionais.
+              Período regular, sem conflitos operacionais.
             </div>
           )}
 
           <div className="text-[10px] text-slate-500 mt-1.5">
-            Clique no bloco para editar ou excluir este afastamento
+            Clique no bloco para editar ou excluir este período
           </div>
         </div>
       )}
-    </section>
+    </div>
   );
 };

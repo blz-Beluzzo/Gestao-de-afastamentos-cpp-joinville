@@ -1,32 +1,35 @@
 import React, { useMemo, useState } from 'react';
 import { AlertTriangle, Calendar, ChevronLeft, ChevronRight, Pencil } from 'lucide-react';
-import type { LancamentoAvaliado } from '../types/ferias';
+import type { PeriodoAvaliado, RegistroAvaliado } from '../types/ferias';
 import {
   ANO_EXERCICIO,
   formatarDataBR,
-  formatarLotacao,
   MESES_VEDADOS,
   NOMES_MESES_COMPLETOS,
   NOMES_MESES_CURTOS,
   obterDiaSemanaInicioMes,
   obterDiasDoMes,
 } from '../utils/dateUtils';
-import { CONFLICT_BLOCK_CLASS, getLeaveVisualStyle } from '../utils/leaveStyles';
 
 interface MonthlyCalendarProps {
-  lancamentos: LancamentoAvaliado[];
+  registros: RegistroAvaliado[];
   ano?: number;
   onSelectAno?: (ano: number) => void;
-  onEditLancamento: (lancamento: LancamentoAvaliado) => void;
+  onEditPeriod: (registro: RegistroAvaliado, periodo?: 1 | 2) => void;
+}
+
+interface AfastamentoDia {
+  registro: RegistroAvaliado;
+  periodo: PeriodoAvaliado;
 }
 
 const DIAS_SEMANA = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
 
 export const MonthlyCalendar: React.FC<MonthlyCalendarProps> = ({
-  lancamentos,
+  registros,
   ano = ANO_EXERCICIO,
   onSelectAno,
-  onEditLancamento,
+  onEditPeriod,
 }) => {
   const [mesSelecionado, setMesSelecionado] = useState<number>(10);
   const [diaSelecionado, setDiaSelecionado] = useState<string>(`${ano}-10-13`);
@@ -37,21 +40,37 @@ export const MonthlyCalendar: React.FC<MonthlyCalendarProps> = ({
   const offsetInicio = obterDiaSemanaInicioMes(ano, mesSelecionado);
 
   const afastamentosPorDia = useMemo(() => {
-    const mapa = new Map<string, LancamentoAvaliado[]>();
+    const mapa = new Map<string, AfastamentoDia[]>();
 
     for (let d = 1; d <= diasNoMes; d++) {
       const isoDia = `${ano}-${String(mesSelecionado).padStart(
         2,
         '0'
       )}-${String(d).padStart(2, '0')}`;
-      const lista = lancamentos.filter(
-        (item) => item.inicio && item.fim && item.inicio <= isoDia && item.fim >= isoDia
-      );
+      const lista: AfastamentoDia[] = [];
+
+      for (const reg of registros) {
+        if (
+          reg.periodo1Avaliado &&
+          reg.periodo1Avaliado.inicio <= isoDia &&
+          reg.periodo1Avaliado.fim >= isoDia
+        ) {
+          lista.push({ registro: reg, periodo: reg.periodo1Avaliado });
+        }
+        if (
+          reg.periodo2Avaliado &&
+          reg.periodo2Avaliado.inicio <= isoDia &&
+          reg.periodo2Avaliado.fim >= isoDia
+        ) {
+          lista.push({ registro: reg, periodo: reg.periodo2Avaliado });
+        }
+      }
+
       mapa.set(isoDia, lista);
     }
 
     return mapa;
-  }, [lancamentos, ano, mesSelecionado, diasNoMes]);
+  }, [registros, ano, mesSelecionado, diasNoMes]);
 
   const afastadosPorMesResumo = useMemo(() => {
     return Array.from({ length: 12 }, (_, idx) => {
@@ -62,19 +81,29 @@ export const MonthlyCalendar: React.FC<MonthlyCalendarProps> = ({
         ultimoDia
       ).padStart(2, '0')}`;
 
-      const servidoresSet = new Set<string>();
+      let count = 0;
       let conflitos = 0;
-      for (const item of lancamentos) {
-        if (item.inicio && item.fim && item.inicio <= prefixoFim && item.fim >= prefixoIni) {
-          servidoresSet.add(`${item.equipe}|${item.servidor.toLowerCase()}`);
-          if (!item.validacao.valido) {
-            conflitos += 1;
-          }
+      for (const reg of registros) {
+        const p1NoMes =
+          reg.periodo1Avaliado &&
+          reg.periodo1Avaliado.inicio <= prefixoFim &&
+          reg.periodo1Avaliado.fim >= prefixoIni;
+        const p2NoMes =
+          reg.periodo2Avaliado &&
+          reg.periodo2Avaliado.inicio <= prefixoFim &&
+          reg.periodo2Avaliado.fim >= prefixoIni;
+
+        if (p1NoMes || p2NoMes) count += 1;
+        if (
+          (p1NoMes && !reg.periodo1Avaliado!.validacao.valido) ||
+          (p2NoMes && !reg.periodo2Avaliado!.validacao.valido)
+        ) {
+          conflitos += 1;
         }
       }
-      return { mes, count: servidoresSet.size, conflitos };
+      return { mes, count, conflitos };
     });
-  }, [lancamentos, ano]);
+  }, [registros, ano]);
 
   // Keep selected date aligned with `ano` and jump to first occupied month if current month has 0 entries
   React.useEffect(() => {
@@ -82,12 +111,14 @@ export const MonthlyCalendar: React.FC<MonthlyCalendarProps> = ({
     if (currentResumo && currentResumo.count > 0) {
       if (!diaSelecionado.startsWith(`${ano}-`)) {
         const prefixo = `${ano}-${String(mesSelecionado).padStart(2, '0')}`;
-        const firstInMonth = lancamentos.find(
-          (p) =>
-            p.inicio <=
-              `${prefixo}-${String(obterDiasDoMes(ano, mesSelecionado)).padStart(2, '0')}` &&
-            p.fim >= `${prefixo}-01`
-        );
+        const firstInMonth = registros
+          .flatMap((r) => [r.periodo1Avaliado, r.periodo2Avaliado])
+          .filter((p): p is PeriodoAvaliado => Boolean(p))
+          .find(
+            (p) =>
+              p.inicio <= `${prefixo}-${String(obterDiasDoMes(ano, mesSelecionado)).padStart(2, '0')}` &&
+              p.fim >= `${prefixo}-01`
+          );
         setDiaSelecionado(
           firstInMonth && firstInMonth.inicio >= `${prefixo}-01`
             ? firstInMonth.inicio
@@ -99,9 +130,10 @@ export const MonthlyCalendar: React.FC<MonthlyCalendarProps> = ({
 
     const anoIni = `${ano}-01-01`;
     const anoFim = `${ano}-12-31`;
-    const firstPeriodInYear = lancamentos.find(
-      (p) => p.inicio <= anoFim && p.fim >= anoIni
-    );
+    const firstPeriodInYear = registros
+      .flatMap((r) => [r.periodo1Avaliado, r.periodo2Avaliado])
+      .filter((p): p is PeriodoAvaliado => Boolean(p))
+      .find((p) => p.inicio <= anoFim && p.fim >= anoIni);
 
     if (firstPeriodInYear) {
       const targetIso =
@@ -114,7 +146,7 @@ export const MonthlyCalendar: React.FC<MonthlyCalendarProps> = ({
     } else if (!diaSelecionado.startsWith(`${ano}-`)) {
       setDiaSelecionado(`${ano}-${String(mesSelecionado).padStart(2, '0')}-01`);
     }
-  }, [ano, lancamentos, afastadosPorMesResumo, mesSelecionado, diaSelecionado]);
+  }, [ano, registros, afastadosPorMesResumo, mesSelecionado, diaSelecionado]);
 
   const selecionarMes = (novoMes: number) => {
     setMesSelecionado(novoMes);
@@ -136,14 +168,25 @@ export const MonthlyCalendar: React.FC<MonthlyCalendarProps> = ({
   };
 
   const afastadosDiaSelecionado = useMemo(() => {
-    return lancamentos.filter(
-      (item) =>
-        item.inicio &&
-        item.fim &&
-        item.inicio <= diaSelecionado &&
-        item.fim >= diaSelecionado
-    );
-  }, [lancamentos, diaSelecionado]);
+    const lista: AfastamentoDia[] = [];
+    for (const reg of registros) {
+      if (
+        reg.periodo1Avaliado &&
+        reg.periodo1Avaliado.inicio <= diaSelecionado &&
+        reg.periodo1Avaliado.fim >= diaSelecionado
+      ) {
+        lista.push({ registro: reg, periodo: reg.periodo1Avaliado });
+      }
+      if (
+        reg.periodo2Avaliado &&
+        reg.periodo2Avaliado.inicio <= diaSelecionado &&
+        reg.periodo2Avaliado.fim >= diaSelecionado
+      ) {
+        lista.push({ registro: reg, periodo: reg.periodo2Avaliado });
+      }
+    }
+    return lista;
+  }, [registros, diaSelecionado]);
 
   return (
     <div className="space-y-4">
@@ -178,7 +221,7 @@ export const MonthlyCalendar: React.FC<MonthlyCalendarProps> = ({
                     : 'text-slate-500'
                 }`}
               >
-                {vedado && info.count === 0 ? 'Vedado' : `${info.count} serv.`}
+                {vedado ? 'Vedado' : `${info.count} serv.`}
               </span>
             </button>
           );
@@ -261,28 +304,29 @@ export const MonthlyCalendar: React.FC<MonthlyCalendarProps> = ({
 
                   <div className="space-y-1">
                     {afastados.slice(0, 3).map((item) => {
-                      const isConflict = !item.validacao.valido;
-                      const leaveStyle = getLeaveVisualStyle(item.tipo);
-                      const tipKey = `${isoDia}-${item.id}`;
+                      const isConflict = !item.periodo.validacao.valido;
+                      const tipKey = `${isoDia}-${item.registro.id}-p${item.periodo.numero}`;
                       const showTip = hoveredTip === tipKey;
 
                       return (
                         <div key={tipKey} className="relative">
                           <button
                             type="button"
-                            onClick={() => onEditLancamento(item)}
+                            onClick={() => onEditPeriod(item.registro, item.periodo.numero)}
                             onMouseEnter={() => setHoveredTip(tipKey)}
                             onMouseLeave={() => setHoveredTip(null)}
                             onFocus={() => setHoveredTip(tipKey)}
                             onBlur={() => setHoveredTip(null)}
                             className={`w-full text-left px-1.5 py-0.5 rounded text-[10px] font-medium border flex items-center gap-1 truncate ${
-                              isConflict ? CONFLICT_BLOCK_CLASS : leaveStyle.blockClass
+                              isConflict
+                                ? 'bg-[#FEE2E2] border-[#DC2626] text-[#991B1B]'
+                                : 'bg-[#FACC15] border-[#CA8A04] text-[#422006]'
                             }`}
                           >
                             {isConflict && (
                               <AlertTriangle className="w-2.5 h-2.5 shrink-0 text-[#DC2626]" />
                             )}
-                            <span className="truncate">{item.servidor}</span>
+                            <span className="truncate">{item.registro.servidor}</span>
                           </button>
 
                           {showTip && (
@@ -291,17 +335,16 @@ export const MonthlyCalendar: React.FC<MonthlyCalendarProps> = ({
                               className="absolute bottom-full left-0 mb-1.5 w-64 p-2.5 rounded-md bg-white border border-slate-300 shadow-lg text-[11px] text-slate-900 z-30 pointer-events-none"
                             >
                               <div className="font-semibold">
-                                {item.servidor} ({formatarLotacao(item.equipe, item.cargo)})
-                              </div>
-                              <div className="text-slate-700 font-medium mt-0.5">
-                                {item.tipo}
+                                {item.registro.servidor} ({item.registro.equipe} ·{' '}
+                                {item.registro.cargo})
                               </div>
                               <div className="font-mono tabular-nums text-slate-600 mt-0.5">
-                                {formatarDataBR(item.inicio)} a {formatarDataBR(item.fim)}
+                                {formatarDataBR(item.periodo.inicio)} a{' '}
+                                {formatarDataBR(item.periodo.fim)}
                               </div>
                               {isConflict && (
                                 <div className="mt-1 text-red-800 bg-red-50 border border-red-200 rounded p-1.5">
-                                  {item.validacao.mensagem}
+                                  {item.periodo.validacao.mensagem}
                                 </div>
                               )}
                             </div>
@@ -359,34 +402,36 @@ export const MonthlyCalendar: React.FC<MonthlyCalendarProps> = ({
 
             {afastadosDiaSelecionado.length === 0 ? (
               <p className="text-xs text-slate-500 py-4 text-center border border-dashed border-slate-200 rounded-md">
-                Nenhum servidor afastado nesta data.
+                Nenhum servidor em férias nesta data.
               </p>
             ) : (
               <ul className="space-y-2.5">
                 {afastadosDiaSelecionado.map((item) => {
-                  const isConflict = !item.validacao.valido;
-                  const leaveStyle = getLeaveVisualStyle(item.tipo);
+                  const isConflict = !item.periodo.validacao.valido;
                   return (
                     <li
-                      key={item.id}
+                      key={`${item.registro.id}-p${item.periodo.numero}`}
                       className={`p-3 rounded-md border text-xs space-y-1.5 ${
-                        isConflict ? 'bg-red-50/70 border-red-200' : leaveStyle.cardClass
+                        isConflict
+                          ? 'bg-red-50/70 border-red-200'
+                          : 'bg-amber-50/60 border-amber-200'
                       }`}
                     >
                       <div className="flex items-start justify-between gap-2">
                         <div>
                           <div className="font-semibold text-slate-900">
-                            {item.servidor}
+                            {item.registro.servidor}
                           </div>
                           <div className="text-slate-600">
-                            {formatarLotacao(item.equipe, item.cargo)} ·{' '}
-                            <span className="font-medium text-slate-800">{item.tipo}</span>
+                            {item.registro.equipe} · {item.registro.cargo}
                           </div>
                         </div>
                         <button
                           type="button"
-                          onClick={() => onEditLancamento(item)}
-                          aria-label={`Editar afastamento de ${item.servidor}`}
+                          onClick={() =>
+                            onEditPeriod(item.registro, item.periodo.numero)
+                          }
+                          aria-label={`Editar período de ${item.registro.servidor}`}
                           className="p-1.5 rounded text-slate-600 hover:text-[#1E3A5F] hover:bg-white transition-colors"
                         >
                           <Pencil className="w-3.5 h-3.5" />
@@ -394,13 +439,15 @@ export const MonthlyCalendar: React.FC<MonthlyCalendarProps> = ({
                       </div>
 
                       <div className="font-mono tabular-nums text-[11px] text-slate-700">
-                        {formatarDataBR(item.inicio)} a {formatarDataBR(item.fim)} ({item.dias}d)
+                        {item.periodo.numero}º Período:{' '}
+                        {formatarDataBR(item.periodo.inicio)} a{' '}
+                        {formatarDataBR(item.periodo.fim)} ({item.periodo.dias}d)
                       </div>
 
                       {isConflict && (
                         <div className="text-[11px] text-red-900 flex items-start gap-1.5 pt-1">
                           <AlertTriangle className="w-3.5 h-3.5 text-red-600 shrink-0 mt-0.5" />
-                          <span>{item.validacao.mensagem}</span>
+                          <span>{item.periodo.validacao.mensagem}</span>
                         </div>
                       )}
                     </li>

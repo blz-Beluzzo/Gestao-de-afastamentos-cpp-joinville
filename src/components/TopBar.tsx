@@ -44,7 +44,7 @@ export const TopBar: React.FC<TopBarProps> = ({
           }}
           className="font-display text-sm sm:text-lg font-bold tracking-tight text-[#1E3A5F] whitespace-nowrap truncate min-w-0"
         >
-          Controle de Afastamentos - CPP Joinville
+          CPP Joinville · Férias 2027
         </a>
 
         {/* Zone 2: Clean single-line navigation links */}
