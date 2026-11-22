@@ -18,12 +18,16 @@ import {
   DriveSpreadsheetFile,
   EQUIPES_LISTA,
   Equipe,
-  RegistroAvaliado,
-  RegistroFerias,
+  LancamentoAfastamento,
+  LancamentoAvaliado,
+  ServidorAgrupado,
+  TIPOS_AFASTAMENTO_LISTA,
+  TipoAfastamento,
 } from './types/ferias';
 import { SEED_FERIAS_2027 } from './data/seedFerias2027';
-import { ANO_EXERCICIO, extrairAnosDosRegistros } from './utils/dateUtils';
-import { avaliarTodosRegistros } from './utils/validarFerias';
+import { ANO_EXERCICIO, ehTerceirizado, extrairAnosDosRegistros } from './utils/dateUtils';
+import { getLeaveVisualStyle } from './utils/leaveStyles';
+import { agruparPorServidor, avaliarTodosLancamentos } from './utils/validarFerias';
 import { exportToCSV, exportToStandaloneHTML } from './utils/exportUtils';
 import {
   getAccessToken,
@@ -52,13 +56,14 @@ import {
 import { SheetsConnectModal } from './components/SheetsConnectModal';
 
 export default function App() {
-  const [registros, setRegistros] = useState<RegistroFerias[]>(SEED_FERIAS_2027);
+  const [lancamentos, setLancamentos] = useState<LancamentoAfastamento[]>(SEED_FERIAS_2027);
   const [activeTab, setActiveTab] = useState<ActiveTab>('cronograma');
   const [anoSelecionado, setAnoSelecionado] = useState<number>(ANO_EXERCICIO);
 
   // Filters
   const [filtroEquipe, setFiltroEquipe] = useState<Equipe | 'Todas'>('Todas');
   const [filtroCargo, setFiltroCargo] = useState<Cargo | 'Todos'>('Todos');
+  const [filtroTipo, setFiltroTipo] = useState<TipoAfastamento | 'Todos'>('Todos');
   const [filtroStatus, setFiltroStatus] = useState<'Todos' | 'Conflitos' | 'Validos'>('Todos');
   const [buscaServidor, setBuscaServidor] = useState('');
 
@@ -76,8 +81,12 @@ export default function App() {
   // Modals
   const [isSheetsModalOpen, setIsSheetsModalOpen] = useState(false);
   const [isVacationModalOpen, setIsVacationModalOpen] = useState(false);
-  const [editingRecord, setEditingRecord] = useState<RegistroFerias | null>(null);
-  const [focusPeriod, setFocusPeriod] = useState<1 | 2 | undefined>(undefined);
+  const [editingRecord, setEditingRecord] = useState<LancamentoAfastamento | null>(null);
+  const [prefillOfficer, setPrefillOfficer] = useState<{
+    servidor: string;
+    equipe: Equipe;
+    cargo: Cargo;
+  } | null>(null);
   const [pendingMutation, setPendingMutation] = useState<PendingMutation | null>(null);
   const [isMutating, setIsMutating] = useState(false);
   const [highlightedRecordId, setHighlightedRecordId] = useState<string | null>(null);
@@ -104,14 +113,14 @@ export default function App() {
 
   const anosDisponiveis = useMemo(() => {
     const anos = new Set<number>([2026, ANO_EXERCICIO, anoSelecionado]);
-    for (const a of extrairAnosDosRegistros(registros)) {
+    for (const a of extrairAnosDosRegistros(lancamentos)) {
       anos.add(a);
     }
     return Array.from(anos).sort((a, b) => a - b);
-  }, [registros, anoSelecionado]);
+  }, [lancamentos, anoSelecionado]);
 
   const sincronizarAnoParaRegistros = (
-    novosRegistros: RegistroFerias[],
+    novosRegistros: LancamentoAfastamento[],
     preferencia?: number
   ) => {
     const anosPresentes = extrairAnosDosRegistros(novosRegistros);
@@ -127,43 +136,65 @@ export default function App() {
     }
   };
 
-  // Cascade validation across all records whenever records state changes
-  const registrosAvaliados: RegistroAvaliado[] = useMemo(
-    () => avaliarTodosRegistros(registros),
-    [registros]
+  // Cascade validation across all leave entries whenever list changes
+  const lancamentosAvaliados: LancamentoAvaliado[] = useMemo(
+    () => avaliarTodosLancamentos(lancamentos),
+    [lancamentos]
   );
 
-  const registrosFiltrados = useMemo(() => {
+  const lancamentosFiltrados = useMemo(() => {
     const termo = buscaServidor.trim().toLowerCase();
-    return registrosAvaliados.filter((reg) => {
+    return lancamentosAvaliados.filter((reg) => {
       if (filtroEquipe !== 'Todas' && reg.equipe !== filtroEquipe) return false;
       if (filtroCargo !== 'Todos' && reg.cargo !== filtroCargo) return false;
-      if (filtroStatus === 'Conflitos' && !reg.temConflito) return false;
-      if (filtroStatus === 'Validos' && reg.temConflito) return false;
+      if (filtroTipo !== 'Todos' && reg.tipo !== filtroTipo) return false;
+      if (filtroStatus === 'Conflitos' && reg.validacao.valido) return false;
+      if (filtroStatus === 'Validos' && !reg.validacao.valido) return false;
       if (termo && !reg.servidor.toLowerCase().includes(termo)) return false;
       return true;
     });
-  }, [registrosAvaliados, filtroEquipe, filtroCargo, filtroStatus, buscaServidor]);
+  }, [
+    lancamentosAvaliados,
+    filtroEquipe,
+    filtroCargo,
+    filtroTipo,
+    filtroStatus,
+    buscaServidor,
+  ]);
+
+  const servidoresAgrupados: ServidorAgrupado[] = useMemo(
+    () => agruparPorServidor(lancamentosFiltrados),
+    [lancamentosFiltrados]
+  );
+
+  const servidoresPoliciais: ServidorAgrupado[] = useMemo(
+    () => servidoresAgrupados.filter((s) => !ehTerceirizado(s.equipe, s.cargo)),
+    [servidoresAgrupados]
+  );
+
+  const servidoresTerceirizados: ServidorAgrupado[] = useMemo(
+    () => servidoresAgrupados.filter((s) => ehTerceirizado(s.equipe, s.cargo)),
+    [servidoresAgrupados]
+  );
+
+  const totalServidoresUnicos = useMemo(
+    () => agruparPorServidor(lancamentosAvaliados).length,
+    [lancamentosAvaliados]
+  );
 
   const kpis = useMemo(() => {
     let periodosValidos = 0;
     let periodosConflito = 0;
-    for (const r of registrosAvaliados) {
-      if (r.periodo1Avaliado) {
-        if (r.periodo1Avaliado.validacao.valido) periodosValidos += 1;
-        else periodosConflito += 1;
-      }
-      if (r.periodo2Avaliado) {
-        if (r.periodo2Avaliado.validacao.valido) periodosValidos += 1;
-        else periodosConflito += 1;
-      }
+    for (const r of lancamentosAvaliados) {
+      if (r.validacao.valido) periodosValidos += 1;
+      else periodosConflito += 1;
     }
     return {
-      totalServidores: registrosAvaliados.length,
+      totalServidores: totalServidoresUnicos,
       periodosValidos,
       periodosConflito,
     };
-  }, [registrosAvaliados]);
+  }, [lancamentosAvaliados, totalServidoresUnicos]);
 
   const loadDriveFiles = async (tokenOverride?: string) => {
     const token = tokenOverride ?? (await getAccessToken());
@@ -194,7 +225,6 @@ export default function App() {
         setUser(res.user);
         setHasToken(true);
 
-        // Auto-reconnect only the spreadsheet previously connected by THIS Google account
         let autoLoaded = false;
         try {
           const savedRaw = localStorage.getItem(getSheetStorageKey(res.user));
@@ -237,7 +267,7 @@ export default function App() {
     setHasToken(false);
     setConnectedSheet(null);
     setDriveFiles([]);
-    setRegistros(SEED_FERIAS_2027);
+    setLancamentos(SEED_FERIAS_2027);
     setAnoSelecionado(ANO_EXERCICIO);
     try {
       localStorage.removeItem(LAST_SHEET_STORAGE_KEY);
@@ -268,7 +298,7 @@ export default function App() {
       );
       const rows = await readSheetRecords(token, info);
       setConnectedSheet(info);
-      setRegistros(rows);
+      setLancamentos(rows);
       sincronizarAnoParaRegistros(rows);
       try {
         localStorage.setItem(
@@ -285,7 +315,7 @@ export default function App() {
         setIsSheetsModalOpen(false);
       }
       setFeedbackMessage(
-        `Planilha "${info.spreadsheetTitle}" (aba "${info.sheetTitle}") carregada com ${rows.length} servidor(es).`
+        `Planilha "${info.spreadsheetTitle}" (aba "${info.sheetTitle}") carregada com ${rows.length} afastamento(s).`
       );
       return true;
     } catch (err: unknown) {
@@ -307,9 +337,9 @@ export default function App() {
     setIsBusySheet(true);
     setSheetError(null);
     try {
-      const { sheetInfo, records } = await createSpreadsheet2027(token, registros);
+      const { sheetInfo, records } = await createSpreadsheet2027(token, lancamentos);
       setConnectedSheet(sheetInfo);
-      setRegistros(records);
+      setLancamentos(records);
       sincronizarAnoParaRegistros(records);
       try {
         localStorage.setItem(
@@ -344,19 +374,46 @@ export default function App() {
     );
   };
 
-  const openEditPeriod = (reg: RegistroAvaliado, periodo?: 1 | 2) => {
-    setEditingRecord(reg);
-    setFocusPeriod(periodo);
+  const openEditLancamento = (lanc: LancamentoAfastamento) => {
+    setEditingRecord(lanc);
+    setPrefillOfficer(null);
     setIsVacationModalOpen(true);
   };
 
   const openCreateNew = () => {
     setEditingRecord(null);
-    setFocusPeriod(undefined);
+    setPrefillOfficer(null);
     setIsVacationModalOpen(true);
   };
 
-  const handleRequestSave = (record: RegistroFerias, conflictMessages: string[]) => {
+  const openCreateNewTerceirizado = () => {
+    setEditingRecord(null);
+    setPrefillOfficer({
+      servidor: '',
+      equipe: 'Terceirizado',
+      cargo: 'Terceirizado',
+    });
+    setIsVacationModalOpen(true);
+  };
+
+  const openCreateNewForOfficer = (officer: {
+    servidor: string;
+    equipe: Equipe;
+    cargo: Cargo;
+  }) => {
+    setEditingRecord(null);
+    setPrefillOfficer({
+      servidor: officer.servidor,
+      equipe: officer.equipe,
+      cargo: officer.cargo,
+    });
+    setIsVacationModalOpen(true);
+  };
+
+  const handleRequestSave = (
+    record: LancamentoAfastamento,
+    conflictMessages: string[]
+  ) => {
     setPendingMutation({
       tipo: editingRecord ? 'update' : 'create',
       registro: record,
@@ -364,7 +421,7 @@ export default function App() {
     });
   };
 
-  const handleRequestDelete = (record: RegistroFerias) => {
+  const handleRequestDelete = (record: LancamentoAfastamento) => {
     setPendingMutation({
       tipo: 'delete',
       registro: record,
@@ -386,61 +443,53 @@ export default function App() {
           throw new Error('Sessão Google expirada. Faça login novamente.');
         }
 
-        let updatedRows: RegistroFerias[];
+        let updatedRows: LancamentoAfastamento[];
         if (tipo === 'create') {
           updatedRows = await appendSheetRecord(token, connectedSheet, registro);
         } else if (tipo === 'update') {
           updatedRows = await updateSheetRecord(token, connectedSheet, registro);
         } else {
-          if (registro.rowIndex && registro.rowIndex >= 1) {
-            updatedRows = await deleteSheetRecord(
-              token,
-              connectedSheet,
-              registro.rowIndex
-            );
-          } else {
-            updatedRows = await readSheetRecords(token, connectedSheet);
-          }
+          updatedRows = await deleteSheetRecord(token, connectedSheet, registro);
         }
-        setRegistros(updatedRows);
+        setLancamentos(updatedRows);
         const anosRegistro =
           tipo === 'delete' ? [] : extrairAnosDosRegistros([registro]);
         sincronizarAnoParaRegistros(updatedRows, anosRegistro[0]);
         if (tipo !== 'delete' && updatedRows.length === 0) {
           setSheetError(
-            `O registro de ${registro.servidor} foi gravado na aba "${connectedSheet.sheetTitle}", mas nenhuma linha pôde ser lida de volta. Verifique as colunas da planilha.`
+            `O lançamento de ${registro.servidor} foi gravado na aba "${connectedSheet.sheetTitle}", mas nenhuma linha pôde ser lida de volta. Verifique as colunas a partir da linha 2.`
           );
         }
         setFeedbackMessage(
           tipo === 'delete'
-            ? `Registro de ${registro.servidor} excluído da planilha (${updatedRows.length} servidor(es) na aba "${connectedSheet.sheetTitle}").`
-            : `Alteração de ${registro.servidor} salva no Google Sheets (${updatedRows.length} servidor(es) na aba "${connectedSheet.sheetTitle}").`
+            ? `Afastamento de ${registro.servidor} excluído da planilha (${updatedRows.length} lançamento(s) na aba "${connectedSheet.sheetTitle}").`
+            : `Lançamento (${registro.tipo}) de ${registro.servidor} salvo no Google Sheets (${updatedRows.length} lançamento(s) na aba "${connectedSheet.sheetTitle}").`
         );
       } else {
         // Local interactive preview mode
-        let nextRecords: RegistroFerias[];
+        let nextRecords: LancamentoAfastamento[];
         if (tipo === 'create') {
-          nextRecords = [...registros, registro];
+          nextRecords = [...lancamentos, registro];
         } else if (tipo === 'update') {
-          nextRecords = registros.map((r) => (r.id === registro.id ? registro : r));
+          nextRecords = lancamentos.map((r) => (r.id === registro.id ? registro : r));
         } else {
-          nextRecords = registros.filter((r) => r.id !== registro.id);
+          nextRecords = lancamentos.filter((r) => r.id !== registro.id);
         }
-        setRegistros(nextRecords);
+        setLancamentos(nextRecords);
         const anosRegistro =
           tipo === 'delete' ? [] : extrairAnosDosRegistros([registro]);
         sincronizarAnoParaRegistros(nextRecords, anosRegistro[0]);
         setFeedbackMessage(
           tipo === 'delete'
-            ? `Registro de ${registro.servidor} removido na prévia local e escala reavaliada.`
-            : `Lançamento de ${registro.servidor} atualizado na prévia local e escala reavaliada.`
+            ? `Afastamento de ${registro.servidor} removido na prévia local e escala reavaliada.`
+            : `Lançamento (${registro.tipo}) de ${registro.servidor} atualizado na prévia local e escala reavaliada.`
         );
       }
 
-      // Ensure newly created or edited officers are never hidden by active filters
       if (tipo === 'create' || tipo === 'update') {
         setFiltroEquipe('Todas');
         setFiltroCargo('Todos');
+        setFiltroTipo('Todos');
         setFiltroStatus('Todos');
         setBuscaServidor('');
         if (activeTab === 'regras' && tipo === 'create') {
@@ -466,6 +515,13 @@ export default function App() {
     }
   };
 
+  const hasActiveFilters =
+    filtroEquipe !== 'Todas' ||
+    filtroCargo !== 'Todos' ||
+    filtroTipo !== 'Todos' ||
+    filtroStatus !== 'Todos' ||
+    buscaServidor.trim() !== '';
+
   return (
     <div id="top" className="min-h-screen flex flex-col bg-[#F8FAFC] text-[#0F172A]">
       <TopBar
@@ -487,7 +543,7 @@ export default function App() {
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div className="space-y-1">
             <h1 className="font-display text-2xl font-bold text-slate-900 tracking-tight text-balance">
-              Programação de Férias — CPP Joinville (2027)
+              Controle de Afastamentos - CPP Joinville
             </h1>
             <p className="text-xs sm:text-sm text-slate-600">
               {connectedSheet ? (
@@ -496,11 +552,11 @@ export default function App() {
                   <strong className="font-medium text-slate-900">
                     {connectedSheet.spreadsheetTitle}
                   </strong>{' '}
-                  · Aba <span className="font-mono">{connectedSheet.sheetTitle}</span>
+                  · Aba <span className="font-mono">{connectedSheet.sheetTitle}</span> (leitura a partir da linha 2)
                 </>
               ) : (
                 <>
-                  Prévia interativa carregada com os 20 servidores da unidade ·{' '}
+                  Prévia interativa carregada com {totalServidoresUnicos} servidores da unidade ·{' '}
                   <button
                     type="button"
                     onClick={() => setIsSheetsModalOpen(true)}
@@ -530,7 +586,7 @@ export default function App() {
             )}
             <button
               type="button"
-              onClick={() => exportToCSV(registrosAvaliados)}
+              onClick={() => exportToCSV(lancamentosAvaliados)}
               className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-md hover:bg-slate-50 transition-colors whitespace-nowrap"
             >
               <Download className="w-3.5 h-3.5" aria-hidden="true" />
@@ -538,7 +594,7 @@ export default function App() {
             </button>
             <button
               type="button"
-              onClick={() => exportToStandaloneHTML(registrosAvaliados)}
+              onClick={() => exportToStandaloneHTML(lancamentosAvaliados)}
               className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-md hover:bg-slate-50 transition-colors whitespace-nowrap"
             >
               <Download className="w-3.5 h-3.5" aria-hidden="true" />
@@ -550,7 +606,7 @@ export default function App() {
               className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium text-white bg-[#1E3A5F] rounded-md hover:bg-[#162D4A] transition-colors whitespace-nowrap"
             >
               <Plus className="w-4 h-4" aria-hidden="true" />
-              <span>Novo Período</span>
+              <span>Novo Afastamento</span>
             </button>
           </div>
         </div>
@@ -604,17 +660,14 @@ export default function App() {
           </div>
 
           <div className="bg-white border border-slate-200 rounded-lg px-4 py-3">
-            <div className="text-xs text-slate-500">Períodos Válidos (Amarelo)</div>
-            <div className="mt-1 flex items-baseline gap-2">
-              <span className="font-mono tabular-nums text-xl font-bold text-[#854D0E]">
-                {kpis.periodosValidos}
-              </span>
-              <span className="inline-block w-3 h-3 rounded-sm bg-[#FACC15] border border-[#CA8A04]" />
+            <div className="text-xs text-slate-500">Afastamentos Regulares</div>
+            <div className="mt-1 font-mono tabular-nums text-xl font-bold text-slate-900">
+              {kpis.periodosValidos}
             </div>
           </div>
 
           <div className="bg-white border border-slate-200 rounded-lg px-4 py-3">
-            <div className="text-xs text-slate-500">Períodos em Conflito (Vermelho)</div>
+            <div className="text-xs text-slate-500">Afastamentos em Conflito</div>
             <div className="mt-1 flex items-baseline gap-2">
               <span className="font-mono tabular-nums text-xl font-bold text-[#991B1B]">
                 {kpis.periodosConflito}
@@ -681,8 +734,8 @@ export default function App() {
             </button>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2.5 flex-1 justify-end">
-            <div className="relative min-w-[190px] flex-1 max-w-[260px]">
+          <div className="flex flex-wrap items-center gap-2 flex-1 justify-end">
+            <div className="relative min-w-[170px] flex-1 max-w-[230px]">
               <Search
                 className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
                 aria-hidden="true"
@@ -698,15 +751,31 @@ export default function App() {
             </div>
 
             <select
+              value={filtroTipo}
+              onChange={(e) =>
+                setFiltroTipo(e.target.value as TipoAfastamento | 'Todos')
+              }
+              aria-label="Filtrar por tipo de afastamento"
+              className="max-w-[195px] px-2.5 py-1.5 text-xs border border-slate-300 rounded-md bg-white text-slate-800 focus:outline-none focus:border-[#1E3A5F]"
+            >
+              <option value="Todos">Todos os tipos</option>
+              {TIPOS_AFASTAMENTO_LISTA.map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
+
+            <select
               value={filtroEquipe}
               onChange={(e) => setFiltroEquipe(e.target.value as Equipe | 'Todas')}
               aria-label="Filtrar por equipe"
-              className="px-3 py-1.5 text-xs border border-slate-300 rounded-md bg-white text-slate-800 focus:outline-none focus:border-[#1E3A5F]"
+              className="px-2.5 py-1.5 text-xs border border-slate-300 rounded-md bg-white text-slate-800 focus:outline-none focus:border-[#1E3A5F]"
             >
               <option value="Todas">Todas as equipes</option>
               {EQUIPES_LISTA.map((eq) => (
                 <option key={eq} value={eq}>
-                  Equipe {eq}
+                  {eq === 'Terceirizado' ? 'Terceirizados' : `Equipe ${eq}`}
                 </option>
               ))}
             </select>
@@ -715,7 +784,7 @@ export default function App() {
               value={filtroCargo}
               onChange={(e) => setFiltroCargo(e.target.value as Cargo | 'Todos')}
               aria-label="Filtrar por cargo"
-              className="px-3 py-1.5 text-xs border border-slate-300 rounded-md bg-white text-slate-800 focus:outline-none focus:border-[#1E3A5F]"
+              className="px-2.5 py-1.5 text-xs border border-slate-300 rounded-md bg-white text-slate-800 focus:outline-none focus:border-[#1E3A5F]"
             >
               <option value="Todos">Todos os cargos</option>
               {CARGOS_LISTA.map((c) => (
@@ -729,7 +798,7 @@ export default function App() {
               value={anoSelecionado}
               onChange={(e) => setAnoSelecionado(Number(e.target.value))}
               aria-label="Ano do cronograma"
-              className="px-3 py-1.5 text-xs font-mono font-medium border border-slate-300 rounded-md bg-white text-slate-800 focus:outline-none focus:border-[#1E3A5F]"
+              className="px-2.5 py-1.5 text-xs font-mono font-medium border border-slate-300 rounded-md bg-white text-slate-800 focus:outline-none focus:border-[#1E3A5F]"
             >
               {anosDisponiveis.map((ano) => (
                 <option key={ano} value={ano}>
@@ -744,7 +813,7 @@ export default function App() {
                 setFiltroStatus(e.target.value as 'Todos' | 'Conflitos' | 'Validos')
               }
               aria-label="Filtrar por situação"
-              className="px-3 py-1.5 text-xs border border-slate-300 rounded-md bg-white text-slate-800 focus:outline-none focus:border-[#1E3A5F]"
+              className="px-2.5 py-1.5 text-xs border border-slate-300 rounded-md bg-white text-slate-800 focus:outline-none focus:border-[#1E3A5F]"
             >
               <option value="Todos">Todas as situações</option>
               <option value="Conflitos">Apenas conflitos</option>
@@ -755,34 +824,39 @@ export default function App() {
 
         {/* Legend bar + active filter count indicator */}
         <div className="flex flex-wrap items-center justify-between gap-4 text-xs text-slate-600 px-1">
-          <div className="flex flex-wrap items-center gap-5">
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+            {TIPOS_AFASTAMENTO_LISTA.map((tipo) => {
+              const st = getLeaveVisualStyle(tipo);
+              return (
+                <div key={tipo} className="flex items-center gap-2">
+                  <span
+                    className={`inline-block w-4 h-3 rounded-sm border ${st.swatchClass}`}
+                  />
+                  <span>{st.label}</span>
+                </div>
+              );
+            })}
             <div className="flex items-center gap-2">
-              <span className="inline-block w-4 h-3 rounded-sm bg-[#FACC15] border border-[#CA8A04]" />
-              <span>Período válido (regular)</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="inline-flex items-center justify-center w-4 h-3 rounded-sm bg-[#FEE2E2] border border-[#DC2626]" />
-              <span>Período em conflito (passe o cursor para detalhes)</span>
+              <span className="inline-block w-4 h-3 rounded-sm bg-[#FEE2E2] border border-[#DC2626]" />
+              <span>Conflito operacional</span>
             </div>
             <div className="flex items-center gap-2">
               <span className="inline-block w-4 h-3 rounded-sm bg-vedado-hatch border border-slate-300" />
-              <span>Meses vedados (Jan, Fev e Dez)</span>
+              <span>Meses vedados p/ férias (Jan, Fev e Dez)</span>
             </div>
           </div>
 
-          {(filtroEquipe !== 'Todas' ||
-            filtroCargo !== 'Todos' ||
-            filtroStatus !== 'Todos' ||
-            buscaServidor.trim() !== '') && (
+          {hasActiveFilters && (
             <div className="flex items-center gap-2 text-xs text-slate-700">
               <span className="font-mono tabular-nums">
-                Exibindo {registrosFiltrados.length} de {registrosAvaliados.length} servidor(es)
+                Exibindo {servidoresAgrupados.length} de {totalServidoresUnicos} servidor(es)
               </span>
               <button
                 type="button"
                 onClick={() => {
                   setFiltroEquipe('Todas');
                   setFiltroCargo('Todos');
+                  setFiltroTipo('Todos');
                   setFiltroStatus('Todos');
                   setBuscaServidor('');
                 }}
@@ -796,37 +870,109 @@ export default function App() {
 
         {/* Active View */}
         {activeTab === 'cronograma' && (
-          <AnnualTimeline
-            registros={registrosFiltrados}
-            ano={anoSelecionado}
-            onSelectAno={setAnoSelecionado}
-            highlightedRecordId={highlightedRecordId}
-            highlightedServidorName={highlightedServidorName}
-            onEditPeriod={openEditPeriod}
-            onCreateNew={openCreateNew}
-          />
+          <div className="space-y-6">
+            {filtroEquipe === 'Terceirizado' ? (
+              <AnnualTimeline
+                registros={servidoresTerceirizados}
+                ano={anoSelecionado}
+                title="Terceirizados"
+                sectionAriaLabel="Cronograma de terceirizados"
+                emptyTitle="Nenhum terceirizado encontrado com os filtros selecionados."
+                emptySubtitle="Ajuste os filtros ou cadastre um novo afastamento na equipe Terceirizado."
+                emptyActionLabel="Cadastrar Terceirizado"
+                onSelectAno={setAnoSelecionado}
+                highlightedRecordId={highlightedRecordId}
+                highlightedServidorName={highlightedServidorName}
+                onEditLancamento={openEditLancamento}
+                onCreateNewForOfficer={openCreateNewForOfficer}
+                onCreateNew={openCreateNewTerceirizado}
+              />
+            ) : servidoresPoliciais.length === 0 && servidoresTerceirizados.length === 0 ? (
+              <AnnualTimeline
+                registros={[]}
+                ano={anoSelecionado}
+                title="Servidor / Lotação"
+                sectionAriaLabel="Cronograma anual"
+                onSelectAno={setAnoSelecionado}
+                highlightedRecordId={highlightedRecordId}
+                highlightedServidorName={highlightedServidorName}
+                onEditLancamento={openEditLancamento}
+                onCreateNewForOfficer={openCreateNewForOfficer}
+                onCreateNew={openCreateNew}
+              />
+            ) : (
+              <>
+                {(servidoresPoliciais.length > 0 || !hasActiveFilters) && (
+                  <AnnualTimeline
+                    registros={servidoresPoliciais}
+                    ano={anoSelecionado}
+                    title="Servidor / Lotação"
+                    sectionAriaLabel="Cronograma de servidores policiais"
+                    onSelectAno={setAnoSelecionado}
+                    highlightedRecordId={highlightedRecordId}
+                    highlightedServidorName={highlightedServidorName}
+                    onEditLancamento={openEditLancamento}
+                    onCreateNewForOfficer={openCreateNewForOfficer}
+                    onCreateNew={openCreateNew}
+                  />
+                )}
+
+                {(servidoresTerceirizados.length > 0 ||
+                  (!hasActiveFilters &&
+                    filtroEquipe === 'Todas' &&
+                    filtroCargo === 'Todos')) && (
+                  <AnnualTimeline
+                    registros={servidoresTerceirizados}
+                    ano={anoSelecionado}
+                    title="Terceirizados"
+                    sectionAriaLabel="Cronograma de terceirizados"
+                    emptyTitle="Nenhum terceirizado cadastrado."
+                    emptySubtitle="Cadastre um colaborador na equipe Terceirizado para acompanhar seus afastamentos nesta seção."
+                    emptyActionLabel="Cadastrar Terceirizado"
+                    onSelectAno={setAnoSelecionado}
+                    highlightedRecordId={highlightedRecordId}
+                    highlightedServidorName={highlightedServidorName}
+                    onEditLancamento={openEditLancamento}
+                    onCreateNewForOfficer={openCreateNewForOfficer}
+                    onCreateNew={openCreateNewTerceirizado}
+                  />
+                )}
+              </>
+            )}
+          </div>
         )}
 
         {activeTab === 'mensal' && (
           <MonthlyCalendar
-            registros={registrosFiltrados}
+            lancamentos={lancamentosFiltrados}
             ano={anoSelecionado}
             onSelectAno={setAnoSelecionado}
-            onEditPeriod={openEditPeriod}
+            onEditLancamento={openEditLancamento}
           />
         )}
 
         {activeTab === 'regras' && (
-          <RulesView registros={registrosAvaliados} onEditPeriod={openEditPeriod} />
+          <RulesView
+            lancamentos={lancamentosAvaliados}
+            onEditLancamento={openEditLancamento}
+          />
         )}
       </main>
 
       <VacationModal
         isOpen={isVacationModalOpen}
         editingRecord={editingRecord}
-        focusPeriod={focusPeriod}
-        allRecords={registros}
+        prefillOfficer={prefillOfficer}
+        allRecords={lancamentos}
         onClose={() => setIsVacationModalOpen(false)}
+        onSelectExistingRecord={(rec) => {
+          setEditingRecord(rec);
+          setPrefillOfficer(null);
+        }}
+        onStartNewForOfficer={(officer) => {
+          setEditingRecord(null);
+          setPrefillOfficer(officer);
+        }}
         onRequestSave={handleRequestSave}
         onRequestDelete={handleRequestDelete}
       />

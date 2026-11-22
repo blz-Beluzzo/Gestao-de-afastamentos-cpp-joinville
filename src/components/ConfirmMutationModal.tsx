@@ -1,11 +1,11 @@
 import React, { useEffect } from 'react';
 import { AlertTriangle, CheckCircle2, Trash2, X } from 'lucide-react';
-import type { RegistroFerias } from '../types/ferias';
-import { formatarDataBR } from '../utils/dateUtils';
+import type { LancamentoAfastamento } from '../types/ferias';
+import { calcularDiasInclusivos, formatarDataBR, formatarLotacao } from '../utils/dateUtils';
 
 export interface PendingMutation {
   tipo: 'create' | 'update' | 'delete';
-  registro: RegistroFerias;
+  registro: LancamentoAfastamento;
   mensagensConflito: string[];
 }
 
@@ -41,22 +41,23 @@ export const ConfirmMutationModal: React.FC<ConfirmMutationModalProps> = ({
 
   const titulo =
     tipo === 'delete'
-      ? 'Confirmar exclusão de registro'
+      ? 'Confirmar exclusão de afastamento'
       : tipo === 'create'
-      ? 'Confirmar novo lançamento de férias'
-      : 'Confirmar alteração de férias';
+      ? 'Confirmar novo lançamento de afastamento'
+      : 'Confirmar alteração de afastamento';
 
   const destino = spreadsheetTitle
     ? `Planilha Google "${spreadsheetTitle}"`
     : 'Visualização local (prévia interativa)';
 
-  const p1 =
-    registro.inicio1 && registro.fim1
-      ? `${formatarDataBR(registro.inicio1)} a ${formatarDataBR(registro.fim1)}`
-      : 'Não definido';
-  const p2 =
-    registro.inicio2 && registro.fim2
-      ? `${formatarDataBR(registro.inicio2)} a ${formatarDataBR(registro.fim2)}`
+  const dias =
+    registro.inicio && registro.fim
+      ? calcularDiasInclusivos(registro.inicio, registro.fim)
+      : 0;
+
+  const periodoTexto =
+    registro.inicio && registro.fim
+      ? `${formatarDataBR(registro.inicio)} a ${formatarDataBR(registro.fim)} (${dias}d)`
       : 'Não definido';
 
   return (
@@ -106,19 +107,19 @@ export const ConfirmMutationModal: React.FC<ConfirmMutationModalProps> = ({
             <div className="flex justify-between gap-4">
               <span className="text-slate-500">Lotação / Cargo</span>
               <span className="text-slate-900 text-right">
-                {registro.equipe} · {registro.cargo}
+                {formatarLotacao(registro.equipe, registro.cargo)}
               </span>
             </div>
             <div className="flex justify-between gap-4">
-              <span className="text-slate-500">1º Período</span>
-              <span className="font-mono tabular-nums text-slate-900 text-right">
-                {p1}
+              <span className="text-slate-500">Tipo de Afastamento</span>
+              <span className="font-medium text-slate-900 text-right">
+                {registro.tipo}
               </span>
             </div>
             <div className="flex justify-between gap-4">
-              <span className="text-slate-500">2º Período</span>
+              <span className="text-slate-500">Período</span>
               <span className="font-mono tabular-nums text-slate-900 text-right">
-                {p2}
+                {periodoTexto}
               </span>
             </div>
           </div>
@@ -135,7 +136,7 @@ export const ConfirmMutationModal: React.FC<ConfirmMutationModalProps> = ({
                 ))}
               </ul>
               <p className="text-red-800 pt-1">
-                Se confirmar, os períodos em conflito serão destacados em vermelho com alerta explicativo no calendário.
+                Se confirmar, o período em conflito será destacado em vermelho com alerta explicativo no calendário.
               </p>
             </div>
           )}

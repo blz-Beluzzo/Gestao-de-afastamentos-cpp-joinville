@@ -129,9 +129,9 @@ export const SheetsConnectModal: React.FC<SheetsConnectModalProps> = ({
                 <p className="text-xs text-slate-600 leading-relaxed">
                   Autorize o acesso ao Google Drive e Google Sheets para listar planilhas existentes ou criar automaticamente a planilha{' '}
                   <span className="font-mono text-slate-800">
-                    Programacao_de_Ferias_CPP_2027
+                    Controle_de_Afastamentos_CPP_Joinville
                   </span>{' '}
-                  com os 20 servidores.
+                  com cabeçalho na linha 1 e coluna própria para tipo de afastamento.
                 </p>
               </div>
 
@@ -273,10 +273,10 @@ export const SheetsConnectModal: React.FC<SheetsConnectModalProps> = ({
               <div className="flex flex-wrap items-center justify-between gap-4 p-4 border border-slate-200 rounded-md">
                 <div className="space-y-0.5 max-w-md">
                   <h3 className="text-sm font-semibold text-slate-900">
-                    Criar Planilha 2027 no Google Drive
+                    Criar Planilha de Afastamentos no Google Drive
                   </h3>
                   <p className="text-xs text-slate-600">
-                    Gera uma nova planilha já formatada e preenchida com os 20 servidores da unidade para uso imediato.
+                    Gera uma nova planilha com cabeçalho na linha 1 (Equipe, Servidor, Cargo, Tipo de Afastamento, Início, Fim, Dias) e dados a partir da linha 2.
                   </p>
                 </div>
                 <button
@@ -287,7 +287,7 @@ export const SheetsConnectModal: React.FC<SheetsConnectModalProps> = ({
                 >
                   <FilePlus2 className="w-4 h-4" />
                   <span>
-                    {isBusySheet ? 'Criando...' : 'Criar Planilha 2027'}
+                    {isBusySheet ? 'Criando...' : 'Criar Planilha'}
                   </span>
                 </button>
               </div>
