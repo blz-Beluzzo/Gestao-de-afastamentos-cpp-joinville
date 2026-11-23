@@ -27,7 +27,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   isSigningIn,
 }) => {
   const navItems: { id: ActiveTab; label: string }[] = [
-    { id: 'cronograma', label: 'Cronograma' },
+    { id: 'cronograma', label: 'Afastamentos' },
     { id: 'mensal', label: 'Mensal' },
     { id: 'escala', label: 'Escala Mensal' },
     { id: 'regras', label: 'Regras' },
