@@ -92,7 +92,7 @@ export function exportToStandaloneHTML(
 <html lang="pt-BR">
 <head>
 <meta charset="utf-8" />
-<title>Controle de Afastamentos - CPP Joinville</title>
+<title>Escala e Afastamentos — CRPP Joinville</title>
 <style>
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #0F172A; background: #F8FAFC; margin: 32px; }
   h1 { color: #1E3A5F; font-size: 20px; margin-bottom: 4px; }
@@ -111,7 +111,7 @@ export function exportToStandaloneHTML(
 </style>
 </head>
 <body>
-  <h1>Controle de Afastamentos - CPP Joinville</h1>
+  <h1>Escala e Afastamentos — CRPP Joinville</h1>
   <p class="meta">Total de lançamentos: ${lancamentos.length} · Lançamentos com pendência/conflito: ${totalConflitos} · Gerado em ${new Date().toLocaleDateString('pt-BR')}</p>
   <table>
     <thead>

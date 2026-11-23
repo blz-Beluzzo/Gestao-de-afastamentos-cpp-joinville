@@ -3,7 +3,7 @@ import { FileSpreadsheet, LogIn } from 'lucide-react';
 import type { User } from 'firebase/auth';
 import type { ConnectedSheetInfo } from '../types/ferias';
 
-export type ActiveTab = 'cronograma' | 'mensal' | 'regras';
+export type ActiveTab = 'cronograma' | 'mensal' | 'escala' | 'regras';
 
 interface TopBarProps {
   activeTab: ActiveTab;
@@ -29,6 +29,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   const navItems: { id: ActiveTab; label: string }[] = [
     { id: 'cronograma', label: 'Cronograma' },
     { id: 'mensal', label: 'Mensal' },
+    { id: 'escala', label: 'Escala Mensal' },
     { id: 'regras', label: 'Regras' },
   ];
 
@@ -44,7 +45,7 @@ export const TopBar: React.FC<TopBarProps> = ({
           }}
           className="font-display text-sm sm:text-lg font-bold tracking-tight text-[#1E3A5F] whitespace-nowrap truncate min-w-0"
         >
-          Controle de Afastamentos - CPP Joinville
+          Escala e Afastamentos — CRPP Joinville
         </a>
 
         {/* Zone 2: Clean single-line navigation links */}

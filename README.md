@@ -1,6 +1,6 @@
-# Controle de Afastamentos — CPP Joinville
+# Escala e Afastamentos — CRPP Joinville
 
-Aplicação web para planejamento, visualização e validação automática da escala de afastamentos dos servidores e colaboradores da CPP Joinville (**Férias**, **Licença-Prêmio**, **Curso/Convocação** e **Afastamento Médico (LTS/LTF)**), com sincronização direta em planilhas do **Google Sheets** por meio da conta Google da unidade.
+Aplicação web para planejamento, validação automática de afastamentos e gestão completa da **Escala Mensal de Plantão (24x72)** e **Convocações (12h)** da **CRPP Joinville** (**Férias**, **Licença-Prêmio**, **Curso/Convocação** e **Afastamento Médico (LTS/LTF)**), integrada a **três planilhas dedicadas no Google Sheets** por meio da conta Google da unidade, com emissão oficial da escala em **PDF assinado**.
 
 ---
 
@@ -19,7 +19,7 @@ flowchart LR
     User["Navegador do Usuário<br/>(Frontend React)"] -->|1. Acessa a página| GHP
     User -->|2. Faz login Google OAuth| FB["Firebase Authentication<br/>(Autenticação e autorização)"]
     FB -->|3. Retorna token temporário<br/>em memória| User
-    User <-->|4. Lê e grava afastamentos diretamente| GS["Google Drive e Google Sheets<br/>(Armazenamento oficial dos dados)"]
+    User <-->|4. Lê e grava afastamentos, delegados e escalas| GS["Google Drive e Google Sheets<br/>(3 Planilhas Oficiais)"]
 ```
 
 ### Papel de cada serviço
@@ -30,7 +30,7 @@ flowchart LR
 | **GitHub Actions** | A esteira automática que, a cada alteração enviada para o GitHub, instala as dependências, compila a aplicação e prepara os arquivos finais do site. |
 | **GitHub Pages** | O serviço de hospedagem estática que disponibiliza a aplicação na internet para ser acessada pelo navegador, sem necessidade de contratar servidor próprio. |
 | **Firebase (Authentication)** | Responsável exclusivamente pela autenticação dos usuários com a conta Google (OAuth 2.0) e pela emissão da autorização temporária para acessar o Google Drive e o Google Sheets. **Não armazena dados da escala.** |
-| **Google Sheets (e Google Drive)** | Onde os dados efetivos e oficiais da gestão (servidores, equipes, cargos, tipos e períodos de afastamento) ficam armazenados, protegidos pelas permissões de compartilhamento da própria conta Google da unidade. |
+| **Google Sheets (3 Planilhas no Drive)** | Armazenamento oficial dos dados da unidade: (1) **Afastamentos**, (2) **Delegados Convocáveis** e (3) **Escalas Mensais** (uma aba por mês, com salvamento automático por vaga e leitura consolidada ao conectar). |
 
 ### Três características essenciais da arquitetura
 
@@ -80,12 +80,18 @@ flowchart LR
   2. **Mesmo cargo na mesma equipe:** impede afastamentos coincidentes (de qualquer tipo) entre dois servidores policiais do mesmo cargo na mesma equipe.
   3. **Delegado e Escrivão:** impede que Delegado e Escrivão da mesma equipe coincidam períodos de afastamento (de qualquer tipo).
   4. **Sobreposição própria e consistência de datas:** valida datas de início/término e impede sobreposição entre lançamentos do mesmo servidor.
-- **Gestão Assistida com Planilha Google:**
-  - Seleção de planilha e aba existentes no Google Drive, vínculo por URL/ID ou criação automática da planilha padrão `Controle_de_Afastamentos_CPP_Joinville` (aba `Afastamentos 2027`).
-  - Reconexão automática à última planilha utilizada vinculada separadamente por conta Google autenticada.
-  - Confirmação explícita em modal antes de gravar, atualizar ou excluir linhas na planilha oficial.
+- **Gestão Assistida com 3 Planilhas no Google Drive:**
+  1. **Planilha de Afastamentos** (`Controle_de_Afastamentos_CPP_Joinville`): leitura e gravação de lançamentos a partir da linha 2, com confirmação explícita em modal antes de gravar, atualizar ou excluir registros.
+  2. **Planilha de Delegados Convocáveis** (`Delegados_Convocacao_CPP_Joinville`): relação nominal de Delegados (`Nome` e `Delegacia`) utilizada para o preenchimento das vagas de DPC na escala.
+  3. **Planilha Exclusiva de Escalas Mensais** (`Escalas_Mensais_CPP_Joinville`): armazena o histórico anual em abas mensais (`Escala Dez-2026`, `Escala Jan-2027`, etc.). Ao conectar ou entrar com o Google, **todos os meses salvos são carregados em lote automaticamente**, e **cada vaga preenchida ou limpa salva automaticamente na aba do mês correspondente**.
+- **Módulo de Escala Mensal (24x72) e Convocações (12h):**
+  - **Ciclo ininterrupto 24x72**: ancorado oficialmente em `01/12/2026 = Charlie` (`Charlie → Delta → Alfa → Bravo`), com início às 08h00 e término às 08h00 do dia seguinte.
+  - **Detecção automática de vacâncias**: cruza os afastamentos do mês de referência para apontar os furos por turno de 12h (`APC - dia/noite` até 2 vagas, `DPC - dia/noite` e `EPC - dia/noite`), considerando a vacância fixa de Delegado da equipe **Delta** e **excluindo servidores terceirizados** da visualização e do cômputo da escala.
+  - **Preenchimento ágil**: seleção nominal de Delegados para `DPC` (exibindo delegacia de origem) e seleção entre as 24 delegacias oficiais da regional para `APC` e `EPC`, com opção de replicar automaticamente para os dois turnos de 12h (completar 24h) e destaque cruzado ao clicar em um afastado na barra lateral.
+- **Emissão Oficial em PDF com Assinatura Institucional:**
+  - Botão **Gerar PDF** abre diálogo para informar o nome do **Delegado Coordenador**, exibe pré-visualização e gera `Escala_<Mes>_<Ano>_CPP_Joinville.pdf` no padrão institucional da CRPP Joinville, com rodapé de horários e regime presencial, data automática à esquerda sem horário (`Joinville, DD/MM/AAAA`) e bloco centralizado (`[NOME]` / `Delegado de Polícia Civil` / `(assinado digitalmente)`).
 - **Exportação de Relatórios:**
-  - Geração local de arquivo `.csv` (compatível com Excel) e relatório `.html` autônomo com tipo de afastamento, duração e detalhamento de conflitos.
+  - Geração local de arquivos `.csv` (compatível com Excel) e relatórios `.html` autônomos para afastamentos e escala mensal.
 
 ---
 
@@ -107,11 +113,23 @@ A aplicação trata a linha 1 (ou a linha de cabeçalho detectada) como cabeçal
 
 > **Compatibilidade:** o leitor também reconhece variações de cabeçalho em português (como `Plantão`, `Setor`, `Policial`, `Função`, `Afastamento`, `Motivo/Categoria`, `Data inicial do Afastamento`, `Data final do Afastamento`), suporta linhas de título antes do cabeçalho e mantém compatibilidade retroativa com planilhas legadas que utilizam 2 períodos na mesma linha (`Início – período 1/2`, `Fim – período 1/2`).
 
+### 2. Planilha de Delegados Convocáveis (`Delegados`)
+
+| Coluna | Descrição |
+| --- | --- |
+| `Nome` | Nome do Delegado disponível para convocação |
+| `Delegacia` | Delegacia/unidade policial de origem |
+
+### 3. Planilha Exclusiva de Escalas Mensais (`Escala <Mês>-<Ano>`)
+
+Cada mês do histórico fica em uma aba própria (`Escala Dez-2026`, `Escala Jan-2027`, etc.) com as colunas `DIA MÊS`, `DIA SEMANA`, `EQUIPE`, `APC - dia`, `APC - noite`, `DPC - dia`, `DPC - noite`, `EPC - dia`, `EPC - noite` e o rodapé institucional padrão na última linha.
+
 ---
 
 ## Stack Tecnológica
 
 - **Frontend:** React 19, TypeScript, Vite 8, Tailwind CSS v4
+- **Geração de PDF:** `jspdf`, `jspdf-autotable`
 - **Ícones e Animações:** `lucide-react`, `motion`
 - **Autenticação e APIs Google:** Firebase Authentication (Google Provider), Google Drive API v3 e Google Sheets API v4
 - **Testes Unitários:** `node:test` + `tsx`
@@ -136,8 +154,8 @@ A aplicação ficará disponível em `http://localhost:3000`.
 # Verificação de tipos TypeScript
 npm run lint
 
-# Testes unitários (regras operacionais e parser do Google Sheets)
-npx tsx --test src/utils/validarFerias.test.ts src/services/googleSheetsService.test.ts
+# Testes unitários (regras operacionais, escala 24x72 e integrações Google Sheets)
+npx tsx --test src/utils/validarFerias.test.ts src/services/googleSheetsService.test.ts src/utils/escalaMensalUtils.test.ts src/services/delegadosSheetsService.test.ts src/services/escalaSheetsService.test.ts
 
 # Build de produção
 npm run build

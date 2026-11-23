@@ -1,8 +1,9 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   CalendarDays,
   CheckCircle2,
+  ClipboardList,
   Download,
   FileSpreadsheet,
   GanttChartSquare,
@@ -24,10 +25,23 @@ import {
   TIPOS_AFASTAMENTO_LISTA,
   TipoAfastamento,
 } from './types/ferias';
+import type {
+  DelegadoConvocavel,
+  EscalaDiaLinha,
+  EscalaMensalMap,
+  SlotKey,
+} from './types/escala';
 import { SEED_FERIAS_2027 } from './data/seedFerias2027';
-import { ANO_EXERCICIO, ehTerceirizado, extrairAnosDosRegistros } from './utils/dateUtils';
+import { SEED_DELEGADOS } from './data/seedDelegados';
+import {
+  ANO_EXERCICIO,
+  ehTerceirizado,
+  extrairAnosDosRegistros,
+  NOMES_MESES_COMPLETOS,
+} from './utils/dateUtils';
 import { getLeaveVisualStyle } from './utils/leaveStyles';
 import { agruparPorServidor, avaliarTodosLancamentos } from './utils/validarFerias';
+import { gerarGradeEscalaMensal } from './utils/escalaMensalUtils';
 import { exportToCSV, exportToStandaloneHTML } from './utils/exportUtils';
 import {
   getAccessToken,
@@ -44,9 +58,26 @@ import {
   readSheetRecords,
   updateSheetRecord,
 } from './services/googleSheetsService';
+import {
+  appendDelegadoRecord,
+  createDelegadosSpreadsheet,
+  deleteDelegadoRecord,
+  getEscalaTabTitle,
+  readDelegadosRecords,
+  updateDelegadoRecord,
+} from './services/delegadosSheetsService';
+import {
+  applySlotUpdateToEscalaMap,
+  createEscalaSpreadsheet,
+  type EscalaSpreadsheetInfo,
+  extractYearMonthFromIsoDate,
+  loadAllEscalasFromSpreadsheet,
+  upsertEscalaMonthInSpreadsheet,
+} from './services/escalaSheetsService';
 import { ActiveTab, TopBar } from './components/TopBar';
 import { AnnualTimeline } from './components/AnnualTimeline';
 import { MonthlyCalendar } from './components/MonthlyCalendar';
+import { EscalaMensalView } from './components/EscalaMensalView';
 import { RulesView } from './components/RulesView';
 import { VacationModal } from './components/VacationModal';
 import {
@@ -54,6 +85,12 @@ import {
   PendingMutation,
 } from './components/ConfirmMutationModal';
 import { SheetsConnectModal } from './components/SheetsConnectModal';
+import { DelegadosModal } from './components/DelegadosModal';
+import { EscalaSheetsModal } from './components/EscalaSheetsModal';
+import {
+  ConfirmDelegadoOrEscalaModal,
+  PendingEscalaOrDelegadoMutation,
+} from './components/ConfirmDelegadoOrEscalaModal';
 
 export default function App() {
   const [lancamentos, setLancamentos] = useState<LancamentoAfastamento[]>(SEED_FERIAS_2027);
@@ -94,7 +131,68 @@ export default function App() {
     null
   );
 
+  // Escala Mensal & Delegados state
+  const ESCALA_STORAGE_KEY = 'cpp_joinville_escala_mensal_v1';
+  const DELEGADOS_LOCAL_KEY = 'cpp_joinville_delegados_local_v1';
+  const LAST_DELEGADOS_SHEET_KEY = 'cpp_joinville_last_delegados_sheet';
+  const LAST_ESCALA_SHEET_KEY = 'cpp_joinville_last_escala_sheet';
+
+  const [escalaAno, setEscalaAno] = useState<number>(2026);
+  const [escalaMes, setEscalaMes] = useState<number>(12);
+  const [escalaMap, setEscalaMap] = useState<EscalaMensalMap>(() => {
+    try {
+      const raw = localStorage.getItem(ESCALA_STORAGE_KEY);
+      return raw ? (JSON.parse(raw) as EscalaMensalMap) : {};
+    } catch {
+      return {};
+    }
+  });
+  const escalaMapRef = useRef<EscalaMensalMap>(escalaMap);
+  escalaMapRef.current = escalaMap;
+
+  const [delegados, setDelegados] = useState<DelegadoConvocavel[]>(() => {
+    try {
+      const raw = localStorage.getItem(DELEGADOS_LOCAL_KEY);
+      return raw ? (JSON.parse(raw) as DelegadoConvocavel[]) : SEED_DELEGADOS;
+    } catch {
+      return SEED_DELEGADOS;
+    }
+  });
+  const [connectedDelegadosSheet, setConnectedDelegadosSheet] =
+    useState<ConnectedSheetInfo | null>(null);
+  const [connectedEscalaSheet, setConnectedEscalaSheet] =
+    useState<EscalaSpreadsheetInfo | null>(null);
+  const [isDelegadosModalOpen, setIsDelegadosModalOpen] = useState(false);
+  const [isEscalaSheetsModalOpen, setIsEscalaSheetsModalOpen] = useState(false);
+  const [isAutoSavingEscala, setIsAutoSavingEscala] = useState(false);
+  const escalaSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const [pendingEscalaSaveGrade, setPendingEscalaSaveGrade] = useState<{
+    ano: number;
+    mes: number;
+    grade: EscalaDiaLinha[];
+  } | null>(null);
+  const [pendingEscalaOrDelegadoMutation, setPendingEscalaOrDelegadoMutation] =
+    useState<PendingEscalaOrDelegadoMutation | null>(null);
+  const [isMutatingEscala, setIsMutatingEscala] = useState(false);
+
   const LAST_SHEET_STORAGE_KEY = 'cpp_joinville_last_sheet';
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(ESCALA_STORAGE_KEY, JSON.stringify(escalaMap));
+    } catch {
+      // ignore storage errors
+    }
+  }, [escalaMap]);
+
+  useEffect(() => {
+    if (connectedDelegadosSheet) return;
+    try {
+      localStorage.setItem(DELEGADOS_LOCAL_KEY, JSON.stringify(delegados));
+    } catch {
+      // ignore storage errors
+    }
+  }, [delegados, connectedDelegadosSheet]);
 
   useEffect(() => {
     const unsubscribe = initAuth(
@@ -106,6 +204,8 @@ export default function App() {
         setUser(loggedUser);
         setHasToken(false);
         setConnectedSheet(null);
+        setConnectedDelegadosSheet(null);
+        setConnectedEscalaSheet(null);
       }
     );
     return () => unsubscribe();
@@ -141,6 +241,8 @@ export default function App() {
     () => avaliarTodosLancamentos(lancamentos),
     [lancamentos]
   );
+  const lancamentosAvaliadosRef = useRef<LancamentoAvaliado[]>(lancamentosAvaliados);
+  lancamentosAvaliadosRef.current = lancamentosAvaliados;
 
   const lancamentosFiltrados = useMemo(() => {
     const termo = buscaServidor.trim().toLowerCase();
@@ -216,6 +318,12 @@ export default function App() {
   const getSheetStorageKey = (u?: User | null) =>
     `${LAST_SHEET_STORAGE_KEY}:${(u?.email || u?.uid || 'default').toLowerCase()}`;
 
+  const getDelegadosSheetStorageKey = (u?: User | null) =>
+    `${LAST_DELEGADOS_SHEET_KEY}:${(u?.email || u?.uid || 'default').toLowerCase()}`;
+
+  const getEscalaSheetStorageKey = (u?: User | null) =>
+    `${LAST_ESCALA_SHEET_KEY}:${(u?.email || u?.uid || 'default').toLowerCase()}`;
+
   const handleSignIn = async () => {
     setIsSigningIn(true);
     setSheetError(null);
@@ -246,6 +354,46 @@ export default function App() {
           // ignore storage errors
         }
 
+        // Also auto-reconnect last Delegados spreadsheet for this user if saved
+        try {
+          const savedDelRaw = localStorage.getItem(getDelegadosSheetStorageKey(res.user));
+          if (savedDelRaw) {
+            const savedDel = JSON.parse(savedDelRaw) as {
+              spreadsheetId?: string;
+              sheetTitle?: string;
+            };
+            if (savedDel?.spreadsheetId) {
+              await handleSelectDelegadosSpreadsheet(
+                savedDel.spreadsheetId,
+                savedDel.sheetTitle,
+                res.accessToken,
+                res.user
+              );
+            }
+          }
+        } catch {
+          // ignore storage errors
+        }
+
+        // Also auto-reconnect last Escalas Mensais spreadsheet and load ALL monthly tabs
+        try {
+          const savedEscalaRaw = localStorage.getItem(getEscalaSheetStorageKey(res.user));
+          if (savedEscalaRaw) {
+            const savedEscala = JSON.parse(savedEscalaRaw) as {
+              spreadsheetId?: string;
+            };
+            if (savedEscala?.spreadsheetId) {
+              await handleSelectEscalaSpreadsheet(
+                savedEscala.spreadsheetId,
+                res.accessToken,
+                res.user
+              );
+            }
+          }
+        } catch {
+          // ignore storage errors
+        }
+
         if (!autoLoaded) {
           setIsSheetsModalOpen(true);
         }
@@ -266,9 +414,17 @@ export default function App() {
     setUser(null);
     setHasToken(false);
     setConnectedSheet(null);
+    setConnectedDelegadosSheet(null);
+    setConnectedEscalaSheet(null);
     setDriveFiles([]);
     setLancamentos(SEED_FERIAS_2027);
     setAnoSelecionado(ANO_EXERCICIO);
+    try {
+      const rawLocal = localStorage.getItem(DELEGADOS_LOCAL_KEY);
+      setDelegados(rawLocal ? (JSON.parse(rawLocal) as DelegadoConvocavel[]) : SEED_DELEGADOS);
+    } catch {
+      setDelegados(SEED_DELEGADOS);
+    }
     try {
       localStorage.removeItem(LAST_SHEET_STORAGE_KEY);
     } catch {
@@ -372,6 +528,424 @@ export default function App() {
       connectedSheet.spreadsheetId,
       connectedSheet.sheetTitle
     );
+  };
+
+  // Delegados spreadsheet & Escala Mensal handlers
+  const handleSelectDelegadosSpreadsheet = async (
+    spreadsheetId: string,
+    preferredTabTitle?: string,
+    tokenOverride?: string,
+    userOverride?: User | null
+  ): Promise<boolean> => {
+    const token = tokenOverride ?? (await getAccessToken());
+    if (!token) {
+      setSheetError('Token expirado. Entre novamente com sua conta Google.');
+      return false;
+    }
+    setIsBusySheet(true);
+    setSheetError(null);
+    try {
+      const info = await getSpreadsheetMetadata(
+        token,
+        spreadsheetId,
+        preferredTabTitle
+      );
+      const rows = await readDelegadosRecords(token, info);
+      setConnectedDelegadosSheet(info);
+      setDelegados(rows);
+      try {
+        localStorage.setItem(
+          getDelegadosSheetStorageKey(userOverride ?? user),
+          JSON.stringify({
+            spreadsheetId: info.spreadsheetId,
+            sheetTitle: info.sheetTitle,
+          })
+        );
+      } catch {
+        // ignore storage errors
+      }
+      setFeedbackMessage(
+        `Planilha de Delegados "${info.spreadsheetTitle}" (aba "${info.sheetTitle}") carregada com ${rows.length} delegado(s).`
+      );
+      return true;
+    } catch (err: unknown) {
+      setSheetError(
+        err instanceof Error
+          ? err.message
+          : 'Erro ao abrir a planilha de Delegados selecionada.'
+      );
+      return false;
+    } finally {
+      setIsBusySheet(false);
+    }
+  };
+
+  const handleCreateDelegadosSpreadsheet = async () => {
+    const token = await getAccessToken();
+    if (!token) {
+      setSheetError('Token expirado. Entre novamente com sua conta Google.');
+      return;
+    }
+    setIsBusySheet(true);
+    setSheetError(null);
+    try {
+      const { sheetInfo, delegados: createdRows } =
+        await createDelegadosSpreadsheet(token, delegados);
+      setConnectedDelegadosSheet(sheetInfo);
+      setDelegados(createdRows);
+      try {
+        localStorage.setItem(
+          getDelegadosSheetStorageKey(user),
+          JSON.stringify({
+            spreadsheetId: sheetInfo.spreadsheetId,
+            sheetTitle: sheetInfo.sheetTitle,
+          })
+        );
+      } catch {
+        // ignore storage errors
+      }
+      setFeedbackMessage(
+        `Planilha de Delegados "${sheetInfo.spreadsheetTitle}" criada no Google Drive.`
+      );
+      await loadDriveFiles(token);
+    } catch (err: unknown) {
+      setSheetError(
+        err instanceof Error
+          ? err.message
+          : 'Erro ao criar a planilha de Delegados no Google Drive.'
+      );
+    } finally {
+      setIsBusySheet(false);
+    }
+  };
+
+  const handleSelectEscalaSpreadsheet = async (
+    spreadsheetId: string,
+    tokenOverride?: string,
+    userOverride?: User | null
+  ): Promise<boolean> => {
+    const token = tokenOverride ?? (await getAccessToken());
+    if (!token) {
+      setSheetError('Token expirado. Entre novamente com sua conta Google.');
+      return false;
+    }
+    setIsBusySheet(true);
+    setSheetError(null);
+    try {
+      const { sheetInfo, escalaMap: loadedMap } =
+        await loadAllEscalasFromSpreadsheet(token, spreadsheetId);
+      setConnectedEscalaSheet(sheetInfo);
+      if (sheetInfo.loadedTabs.length > 0) {
+        setEscalaMap(loadedMap);
+      }
+      try {
+        localStorage.setItem(
+          getEscalaSheetStorageKey(userOverride ?? user),
+          JSON.stringify({ spreadsheetId: sheetInfo.spreadsheetId })
+        );
+      } catch {
+        // ignore storage errors
+      }
+      setFeedbackMessage(
+        sheetInfo.loadedTabs.length > 0
+          ? `Planilha de Escalas "${sheetInfo.spreadsheetTitle}" conectada: ${sheetInfo.loadedTabs.length} aba(s) mensal(is) carregada(s) (${Object.keys(loadedMap).length} dia(s) com convocações).`
+          : `Planilha de Escalas "${sheetInfo.spreadsheetTitle}" conectada. Nenhuma aba mensal encontrada ainda — ao preencher vagas, as abas serão criadas automaticamente.`
+      );
+      return true;
+    } catch (err: unknown) {
+      setSheetError(
+        err instanceof Error
+          ? err.message
+          : 'Erro ao carregar as escalas mensais da planilha selecionada.'
+      );
+      return false;
+    } finally {
+      setIsBusySheet(false);
+    }
+  };
+
+  const handleCreateEscalaSpreadsheet = async () => {
+    const token = await getAccessToken();
+    if (!token) {
+      setSheetError('Token expirado. Entre novamente com sua conta Google.');
+      return;
+    }
+    setIsBusySheet(true);
+    setSheetError(null);
+    try {
+      const { sheetInfo, escalaMap: loadedMap } = await createEscalaSpreadsheet({
+        accessToken: token,
+        anoAtual: escalaAno,
+        mesAtual: escalaMes,
+        escalaMap: escalaMapRef.current,
+        lancamentos: lancamentosAvaliadosRef.current,
+      });
+      setConnectedEscalaSheet(sheetInfo);
+      if (sheetInfo.loadedTabs.length > 0) {
+        setEscalaMap(loadedMap);
+      }
+      try {
+        localStorage.setItem(
+          getEscalaSheetStorageKey(user),
+          JSON.stringify({ spreadsheetId: sheetInfo.spreadsheetId })
+        );
+      } catch {
+        // ignore storage errors
+      }
+      setFeedbackMessage(
+        `3ª planilha "${sheetInfo.spreadsheetTitle}" criada no Google Drive com ${sheetInfo.loadedTabs.length} aba(s) mensal(is) e salvamento automático ativo.`
+      );
+      await loadDriveFiles(token);
+    } catch (err: unknown) {
+      setSheetError(
+        err instanceof Error
+          ? err.message
+          : 'Erro ao criar a planilha de Escalas Mensais no Google Drive.'
+      );
+    } finally {
+      setIsBusySheet(false);
+    }
+  };
+
+  const handleUpdateEscalaSlot = ({
+    isoDate,
+    slot,
+    values,
+    applyToTwin,
+  }: {
+    isoDate: string;
+    slot: SlotKey;
+    values: string[];
+    applyToTwin: boolean;
+  }) => {
+    const nextMap = applySlotUpdateToEscalaMap(escalaMapRef.current, {
+      isoDate,
+      slot,
+      values,
+      applyToTwin,
+    });
+    escalaMapRef.current = nextMap;
+    setEscalaMap(nextMap);
+
+    if (!connectedEscalaSheet || !hasToken) {
+      return;
+    }
+
+    const ym = extractYearMonthFromIsoDate(isoDate);
+    if (!ym) return;
+
+    const targetSpreadsheetId = connectedEscalaSheet.spreadsheetId;
+    const targetSpreadsheetTitle = connectedEscalaSheet.spreadsheetTitle;
+    const gradeMes = gerarGradeEscalaMensal({
+      ano: ym.ano,
+      mes: ym.mes,
+      lancamentos: lancamentosAvaliadosRef.current,
+      escalaMap: nextMap,
+    });
+
+    escalaSaveQueueRef.current = escalaSaveQueueRef.current
+      .catch(() => {
+        // keep queue alive after prior failure
+      })
+      .then(async () => {
+        setIsAutoSavingEscala(true);
+        setSheetError(null);
+        try {
+          const token = await getAccessToken();
+          if (!token) {
+            throw new Error('Sessão Google expirada. Faça login novamente.');
+          }
+          const saved = await upsertEscalaMonthInSpreadsheet({
+            accessToken: token,
+            spreadsheetId: targetSpreadsheetId,
+            ano: ym.ano,
+            mes: ym.mes,
+            grade: gradeMes,
+          });
+          setConnectedEscalaSheet((prev) => {
+            if (!prev || prev.spreadsheetId !== targetSpreadsheetId) return prev;
+            const otherTabs = prev.loadedTabs.filter(
+              (t) => !(t.ano === ym.ano && t.mes === ym.mes)
+            );
+            const updatedTabs = [
+              ...otherTabs,
+              {
+                sheetId: saved.sheetId,
+                tabTitle: saved.sheetTitle,
+                ano: ym.ano,
+                mes: ym.mes,
+                diasPreenchidos: saved.diasPreenchidos,
+              },
+            ].sort((a, b) => (a.ano !== b.ano ? a.ano - b.ano : a.mes - b.mes));
+            return { ...prev, loadedTabs: updatedTabs };
+          });
+          setFeedbackMessage(
+            `Vaga salva automaticamente na aba "${saved.sheetTitle}" (${targetSpreadsheetTitle}).`
+          );
+        } catch (err: unknown) {
+          setSheetError(
+            err instanceof Error
+              ? `Falha no salvamento automático: ${err.message}`
+              : 'Falha ao salvar automaticamente a vaga no Google Sheets.'
+          );
+        } finally {
+          setIsAutoSavingEscala(false);
+        }
+      });
+  };
+
+  const handleRequestDelegadoMutation = (
+    action: 'create' | 'update' | 'delete',
+    delegado: DelegadoConvocavel
+  ) => {
+    if (!connectedDelegadosSheet || !hasToken) {
+      // Local preview update immediately without Sheets API confirmation
+      if (action === 'create') {
+        setDelegados((prev) => [...prev, delegado]);
+        setFeedbackMessage(`Delegado ${delegado.nome} cadastrado na prévia local.`);
+      } else if (action === 'update') {
+        setDelegados((prev) =>
+          prev.map((d) => (d.id === delegado.id ? delegado : d))
+        );
+        setFeedbackMessage(`Delegado ${delegado.nome} atualizado na prévia local.`);
+      } else {
+        setDelegados((prev) => prev.filter((d) => d.id !== delegado.id));
+        setFeedbackMessage(`Delegado ${delegado.nome} removido da prévia local.`);
+      }
+      return;
+    }
+
+    setPendingEscalaOrDelegadoMutation({
+      kind: 'delegado',
+      action,
+      delegado,
+      spreadsheetTitle: connectedDelegadosSheet.spreadsheetTitle,
+      sheetTitle: connectedDelegadosSheet.sheetTitle,
+    });
+  };
+
+  const handleRequestSaveEscalaToSheet = ({
+    ano,
+    mes,
+    grade,
+    totalPreenchidos,
+  }: {
+    ano: number;
+    mes: number;
+    grade: EscalaDiaLinha[];
+    totalPreenchidos: number;
+  }) => {
+    if (!connectedEscalaSheet || !hasToken) {
+      setIsEscalaSheetsModalOpen(true);
+      if (hasToken) void loadDriveFiles();
+      return;
+    }
+    setPendingEscalaSaveGrade({ ano, mes, grade });
+    setPendingEscalaOrDelegadoMutation({
+      kind: 'saveEscala',
+      ano,
+      mesNome: NOMES_MESES_COMPLETOS[mes - 1],
+      tabTitle: getEscalaTabTitle(ano, mes),
+      spreadsheetTitle: connectedEscalaSheet.spreadsheetTitle,
+      totalDias: grade.length,
+      totalPreenchidos,
+    });
+  };
+
+  const handleReloadAllEscalasFromSheet = async () => {
+    if (!connectedEscalaSheet) return;
+    await handleSelectEscalaSpreadsheet(connectedEscalaSheet.spreadsheetId);
+  };
+
+  const executeConfirmedEscalaOrDelegadoMutation = async () => {
+    if (!pendingEscalaOrDelegadoMutation) return;
+    setIsMutatingEscala(true);
+    setSheetError(null);
+    try {
+      const token = await getAccessToken();
+      if (!token) {
+        throw new Error('Sessão Google expirada. Faça login novamente.');
+      }
+
+      if (pendingEscalaOrDelegadoMutation.kind === 'delegado') {
+        if (!connectedDelegadosSheet) {
+          throw new Error('Nenhuma planilha de Delegados conectada.');
+        }
+        const { action, delegado } = pendingEscalaOrDelegadoMutation;
+        let updated: DelegadoConvocavel[];
+        if (action === 'create') {
+          updated = await appendDelegadoRecord(
+            token,
+            connectedDelegadosSheet,
+            delegado
+          );
+        } else if (action === 'update') {
+          updated = await updateDelegadoRecord(
+            token,
+            connectedDelegadosSheet,
+            delegado
+          );
+        } else {
+          updated = await deleteDelegadoRecord(
+            token,
+            connectedDelegadosSheet,
+            delegado
+          );
+        }
+        setDelegados(updated);
+        setFeedbackMessage(
+          action === 'delete'
+            ? `Delegado ${delegado.nome} removido da planilha "${connectedDelegadosSheet.spreadsheetTitle}".`
+            : `Delegado ${delegado.nome} salvo na planilha "${connectedDelegadosSheet.spreadsheetTitle}".`
+        );
+      } else if (pendingEscalaSaveGrade) {
+        if (!connectedEscalaSheet) {
+          throw new Error('Nenhuma planilha de Escalas conectada no Google Drive.');
+        }
+        const saved = await upsertEscalaMonthInSpreadsheet({
+          accessToken: token,
+          spreadsheetId: connectedEscalaSheet.spreadsheetId,
+          ano: pendingEscalaSaveGrade.ano,
+          mes: pendingEscalaSaveGrade.mes,
+          grade: pendingEscalaSaveGrade.grade,
+        });
+        setConnectedEscalaSheet((prev) => {
+          if (!prev) return prev;
+          const otherTabs = prev.loadedTabs.filter(
+            (t) =>
+              !(
+                t.ano === pendingEscalaSaveGrade.ano &&
+                t.mes === pendingEscalaSaveGrade.mes
+              )
+          );
+          const updatedTabs = [
+            ...otherTabs,
+            {
+              sheetId: saved.sheetId,
+              tabTitle: saved.sheetTitle,
+              ano: pendingEscalaSaveGrade.ano,
+              mes: pendingEscalaSaveGrade.mes,
+              diasPreenchidos: saved.diasPreenchidos,
+            },
+          ].sort((a, b) => (a.ano !== b.ano ? a.ano - b.ano : a.mes - b.mes));
+          return { ...prev, loadedTabs: updatedTabs };
+        });
+        setFeedbackMessage(
+          `Escala Mensal gravada na aba "${saved.sheetTitle}" da planilha "${connectedEscalaSheet.spreadsheetTitle}".`
+        );
+      }
+
+      setPendingEscalaOrDelegadoMutation(null);
+      setPendingEscalaSaveGrade(null);
+    } catch (err: unknown) {
+      setSheetError(
+        err instanceof Error ? err.message : 'Falha ao sincronizar com o Google Sheets.'
+      );
+      setPendingEscalaOrDelegadoMutation(null);
+      setPendingEscalaSaveGrade(null);
+    } finally {
+      setIsMutatingEscala(false);
+    }
   };
 
   const openEditLancamento = (lanc: LancamentoAfastamento) => {
@@ -538,78 +1112,80 @@ export default function App() {
         isSigningIn={isSigningIn}
       />
 
-      <main className="flex-1 max-w-[1440px] w-full mx-auto px-4 sm:px-6 py-6 space-y-5">
-        {/* Page title & workspace context */}
-        <div className="flex flex-wrap items-end justify-between gap-4">
-          <div className="space-y-1">
-            <h1 className="font-display text-2xl font-bold text-slate-900 tracking-tight text-balance">
-              Controle de Afastamentos - CPP Joinville
-            </h1>
-            <p className="text-xs sm:text-sm text-slate-600">
-              {connectedSheet ? (
-                <>
-                  Sincronizado com Google Sheets:{' '}
-                  <strong className="font-medium text-slate-900">
-                    {connectedSheet.spreadsheetTitle}
-                  </strong>{' '}
-                  · Aba <span className="font-mono">{connectedSheet.sheetTitle}</span> (leitura a partir da linha 2)
-                </>
-              ) : (
-                <>
-                  Prévia interativa carregada com {totalServidoresUnicos} servidores da unidade ·{' '}
-                  <button
-                    type="button"
-                    onClick={() => setIsSheetsModalOpen(true)}
-                    className="text-[#1E3A5F] font-medium hover:underline"
-                  >
-                    Vincular Planilha no Google Drive
-                  </button>
-                </>
-              )}
-            </p>
-          </div>
+      <main className="flex-1 max-w-[1440px] w-full mx-auto px-4 sm:px-6 py-5 space-y-4">
+        {/* Page title & workspace context (hidden on Escala Mensal, which renders its own dedicated header & KPIs) */}
+        {activeTab !== 'escala' && (
+          <div className="flex flex-wrap items-end justify-between gap-4">
+            <div className="space-y-1">
+              <h1 className="font-display text-2xl font-bold text-slate-900 tracking-tight text-balance">
+                Escala e Afastamentos — CRPP Joinville
+              </h1>
+              <p className="text-xs sm:text-sm text-slate-600">
+                {connectedSheet ? (
+                  <>
+                    Sincronizado com Google Sheets:{' '}
+                    <strong className="font-medium text-slate-900">
+                      {connectedSheet.spreadsheetTitle}
+                    </strong>{' '}
+                    · Aba <span className="font-mono">{connectedSheet.sheetTitle}</span> (leitura a partir da linha 2)
+                  </>
+                ) : (
+                  <>
+                    Prévia interativa carregada com {totalServidoresUnicos} servidores da unidade ·{' '}
+                    <button
+                      type="button"
+                      onClick={() => setIsSheetsModalOpen(true)}
+                      className="text-[#1E3A5F] font-medium hover:underline"
+                    >
+                      Vincular Planilha no Google Drive
+                    </button>
+                  </>
+                )}
+              </p>
+            </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            {connectedSheet && hasToken && (
+            <div className="flex flex-wrap items-center gap-2">
+              {connectedSheet && hasToken && (
+                <button
+                  type="button"
+                  onClick={handleReloadConnectedSheet}
+                  disabled={isBusySheet}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-[#1E3A5F] bg-white border border-slate-300 rounded-md hover:bg-slate-50 disabled:opacity-60 transition-colors whitespace-nowrap"
+                >
+                  <RefreshCw
+                    className={`w-3.5 h-3.5 ${isBusySheet ? 'animate-spin' : ''}`}
+                    aria-hidden="true"
+                  />
+                  <span>{isBusySheet ? 'Sincronizando...' : 'Sincronizar Planilha'}</span>
+                </button>
+              )}
               <button
                 type="button"
-                onClick={handleReloadConnectedSheet}
-                disabled={isBusySheet}
-                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-[#1E3A5F] bg-white border border-slate-300 rounded-md hover:bg-slate-50 disabled:opacity-60 transition-colors whitespace-nowrap"
+                onClick={() => exportToCSV(lancamentosAvaliados)}
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-md hover:bg-slate-50 transition-colors whitespace-nowrap"
               >
-                <RefreshCw
-                  className={`w-3.5 h-3.5 ${isBusySheet ? 'animate-spin' : ''}`}
-                  aria-hidden="true"
-                />
-                <span>{isBusySheet ? 'Sincronizando...' : 'Sincronizar Planilha'}</span>
+                <Download className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>Exportar CSV</span>
               </button>
-            )}
-            <button
-              type="button"
-              onClick={() => exportToCSV(lancamentosAvaliados)}
-              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-md hover:bg-slate-50 transition-colors whitespace-nowrap"
-            >
-              <Download className="w-3.5 h-3.5" aria-hidden="true" />
-              <span>Exportar CSV</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => exportToStandaloneHTML(lancamentosAvaliados)}
-              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-md hover:bg-slate-50 transition-colors whitespace-nowrap"
-            >
-              <Download className="w-3.5 h-3.5" aria-hidden="true" />
-              <span>Relatório HTML</span>
-            </button>
-            <button
-              type="button"
-              onClick={openCreateNew}
-              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium text-white bg-[#1E3A5F] rounded-md hover:bg-[#162D4A] transition-colors whitespace-nowrap"
-            >
-              <Plus className="w-4 h-4" aria-hidden="true" />
-              <span>Novo Afastamento</span>
-            </button>
+              <button
+                type="button"
+                onClick={() => exportToStandaloneHTML(lancamentosAvaliados)}
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-md hover:bg-slate-50 transition-colors whitespace-nowrap"
+              >
+                <Download className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>Relatório HTML</span>
+              </button>
+              <button
+                type="button"
+                onClick={openCreateNew}
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium text-white bg-[#1E3A5F] rounded-md hover:bg-[#162D4A] transition-colors whitespace-nowrap"
+              >
+                <Plus className="w-4 h-4" aria-hidden="true" />
+                <span>Novo Afastamento</span>
+              </button>
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Feedback / error banners */}
         {feedbackMessage && (
@@ -647,71 +1223,73 @@ export default function App() {
           </div>
         )}
 
-        {/* 4-column summary KPI strip */}
-        <section
-          aria-label="Indicadores da programação"
-          className="grid grid-cols-2 lg:grid-cols-4 gap-3"
-        >
-          <div className="bg-white border border-slate-200 rounded-lg px-4 py-3">
-            <div className="text-xs text-slate-500">Servidores na Escala</div>
-            <div className="mt-1 font-mono tabular-nums text-xl font-bold text-slate-900">
-              {kpis.totalServidores}
+        {/* 4-column summary KPI strip (shown on leave tabs only) */}
+        {activeTab !== 'escala' && (
+          <section
+            aria-label="Indicadores da programação"
+            className="grid grid-cols-2 lg:grid-cols-4 gap-3"
+          >
+            <div className="bg-white border border-slate-200 rounded-lg px-4 py-3">
+              <div className="text-xs text-slate-500">Servidores na Escala</div>
+              <div className="mt-1 font-mono tabular-nums text-xl font-bold text-slate-900">
+                {kpis.totalServidores}
+              </div>
             </div>
-          </div>
 
-          <div className="bg-white border border-slate-200 rounded-lg px-4 py-3">
-            <div className="text-xs text-slate-500">Afastamentos Regulares</div>
-            <div className="mt-1 font-mono tabular-nums text-xl font-bold text-slate-900">
-              {kpis.periodosValidos}
+            <div className="bg-white border border-slate-200 rounded-lg px-4 py-3">
+              <div className="text-xs text-slate-500">Afastamentos Regulares</div>
+              <div className="mt-1 font-mono tabular-nums text-xl font-bold text-slate-900">
+                {kpis.periodosValidos}
+              </div>
             </div>
-          </div>
 
-          <div className="bg-white border border-slate-200 rounded-lg px-4 py-3">
-            <div className="text-xs text-slate-500">Afastamentos em Conflito</div>
-            <div className="mt-1 flex items-baseline gap-2">
-              <span className="font-mono tabular-nums text-xl font-bold text-[#991B1B]">
-                {kpis.periodosConflito}
-              </span>
-              {kpis.periodosConflito > 0 && (
+            <div className="bg-white border border-slate-200 rounded-lg px-4 py-3">
+              <div className="text-xs text-slate-500">Afastamentos em Conflito</div>
+              <div className="mt-1 flex items-baseline gap-2">
+                <span className="font-mono tabular-nums text-xl font-bold text-[#991B1B]">
+                  {kpis.periodosConflito}
+                </span>
+                {kpis.periodosConflito > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('regras')}
+                    className="text-xs text-red-700 hover:underline font-medium"
+                  >
+                    Ver detalhes
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="bg-white border border-slate-200 rounded-lg px-4 py-3">
+              <div className="text-xs text-slate-500">Base de Dados</div>
+              <div className="mt-1 flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+                <span className="text-sm font-semibold text-slate-900">
+                  {connectedSheet ? 'Google Sheets' : 'Prévia Local'}
+                </span>
                 <button
                   type="button"
-                  onClick={() => setActiveTab('regras')}
-                  className="text-xs text-red-700 hover:underline font-medium"
+                  onClick={() => setIsSheetsModalOpen(true)}
+                  className="inline-flex items-center gap-1 text-xs font-medium text-[#1E3A5F] hover:underline shrink-0"
                 >
-                  Ver detalhes
+                  <FileSpreadsheet className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>{connectedSheet ? 'Trocar' : 'Conectar'}</span>
                 </button>
-              )}
+              </div>
             </div>
-          </div>
-
-          <div className="bg-white border border-slate-200 rounded-lg px-4 py-3">
-            <div className="text-xs text-slate-500">Base de Dados</div>
-            <div className="mt-1 flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
-              <span className="text-sm font-semibold text-slate-900">
-                {connectedSheet ? 'Google Sheets' : 'Prévia Local'}
-              </span>
-              <button
-                type="button"
-                onClick={() => setIsSheetsModalOpen(true)}
-                className="inline-flex items-center gap-1 text-xs font-medium text-[#1E3A5F] hover:underline shrink-0"
-              >
-                <FileSpreadsheet className="w-3.5 h-3.5" aria-hidden="true" />
-                <span>{connectedSheet ? 'Trocar' : 'Conectar'}</span>
-              </button>
-            </div>
-          </div>
-        </section>
+          </section>
+        )}
 
         {/* Workspace toolbar: view toggle + filters */}
         <section
           aria-label="Filtros e visualização"
-          className="bg-white border border-slate-200 rounded-lg p-3 flex flex-wrap items-center justify-between gap-3"
+          className="bg-white border border-slate-200 rounded-lg p-2.5 flex flex-wrap items-center justify-between gap-2"
         >
-          <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-md">
+          <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-md overflow-x-auto">
             <button
               type="button"
               onClick={() => setActiveTab('cronograma')}
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded transition-colors whitespace-nowrap ${
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded transition-colors whitespace-nowrap shrink-0 ${
                 activeTab === 'cronograma'
                   ? 'bg-white text-slate-900 shadow-sm'
                   : 'text-slate-600 hover:text-slate-900'
@@ -723,7 +1301,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => setActiveTab('mensal')}
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded transition-colors whitespace-nowrap ${
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded transition-colors whitespace-nowrap shrink-0 ${
                 activeTab === 'mensal'
                   ? 'bg-white text-slate-900 shadow-sm'
                   : 'text-slate-600 hover:text-slate-900'
@@ -732,141 +1310,161 @@ export default function App() {
               <CalendarDays className="w-3.5 h-3.5" aria-hidden="true" />
               <span>Calendário Mensal</span>
             </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('escala')}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded transition-colors whitespace-nowrap shrink-0 ${
+                activeTab === 'escala'
+                  ? 'bg-white text-slate-900 shadow-sm'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <ClipboardList className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>Escala Mensal</span>
+            </button>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 flex-1 justify-end">
-            <div className="relative min-w-[170px] flex-1 max-w-[230px]">
-              <Search
-                className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
-                aria-hidden="true"
-              />
-              <input
-                type="search"
-                value={buscaServidor}
-                onChange={(e) => setBuscaServidor(e.target.value)}
-                placeholder="Buscar servidor..."
-                aria-label="Buscar servidor por nome"
-                className="w-full pl-8 pr-3 py-1.5 text-xs border border-slate-300 rounded-md bg-white text-slate-900 focus:outline-none focus:border-[#1E3A5F]"
-              />
+          {activeTab !== 'escala' ? (
+            <div className="flex flex-wrap items-center gap-1.5 flex-1 justify-end">
+              <div className="relative min-w-[130px] flex-1 max-w-[175px]">
+                <Search
+                  className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none"
+                  aria-hidden="true"
+                />
+                <input
+                  type="search"
+                  value={buscaServidor}
+                  onChange={(e) => setBuscaServidor(e.target.value)}
+                  placeholder="Buscar servidor..."
+                  aria-label="Buscar servidor por nome"
+                  className="w-full pl-7 pr-2.5 py-1.5 text-xs border border-slate-300 rounded-md bg-white text-slate-900 focus:outline-none focus:border-[#1E3A5F]"
+                />
+              </div>
+
+              <select
+                value={filtroTipo}
+                onChange={(e) =>
+                  setFiltroTipo(e.target.value as TipoAfastamento | 'Todos')
+                }
+                aria-label="Filtrar por tipo de afastamento"
+                className="max-w-[160px] px-2 py-1.5 text-xs border border-slate-300 rounded-md bg-white text-slate-800 focus:outline-none focus:border-[#1E3A5F]"
+              >
+                <option value="Todos">Todos os tipos</option>
+                {TIPOS_AFASTAMENTO_LISTA.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </select>
+
+              <select
+                value={filtroEquipe}
+                onChange={(e) => setFiltroEquipe(e.target.value as Equipe | 'Todas')}
+                aria-label="Filtrar por equipe"
+                className="max-w-[140px] px-2 py-1.5 text-xs border border-slate-300 rounded-md bg-white text-slate-800 focus:outline-none focus:border-[#1E3A5F]"
+              >
+                <option value="Todas">Todas as equipes</option>
+                {EQUIPES_LISTA.map((eq) => (
+                  <option key={eq} value={eq}>
+                    {eq === 'Terceirizado' ? 'Terceirizados' : `Equipe ${eq}`}
+                  </option>
+                ))}
+              </select>
+
+              <select
+                value={filtroCargo}
+                onChange={(e) => setFiltroCargo(e.target.value as Cargo | 'Todos')}
+                aria-label="Filtrar por cargo"
+                className="max-w-[130px] px-2 py-1.5 text-xs border border-slate-300 rounded-md bg-white text-slate-800 focus:outline-none focus:border-[#1E3A5F]"
+              >
+                <option value="Todos">Todos os cargos</option>
+                {CARGOS_LISTA.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+
+              <select
+                value={anoSelecionado}
+                onChange={(e) => setAnoSelecionado(Number(e.target.value))}
+                aria-label="Ano do cronograma"
+                className="px-2 py-1.5 text-xs font-mono font-medium border border-slate-300 rounded-md bg-white text-slate-800 focus:outline-none focus:border-[#1E3A5F]"
+              >
+                {anosDisponiveis.map((ano) => (
+                  <option key={ano} value={ano}>
+                    Ano {ano}
+                  </option>
+                ))}
+              </select>
+
+              <select
+                value={filtroStatus}
+                onChange={(e) =>
+                  setFiltroStatus(e.target.value as 'Todos' | 'Conflitos' | 'Validos')
+                }
+                aria-label="Filtrar por situação"
+                className="max-w-[145px] px-2 py-1.5 text-xs border border-slate-300 rounded-md bg-white text-slate-800 focus:outline-none focus:border-[#1E3A5F]"
+              >
+                <option value="Todos">Todas as situações</option>
+                <option value="Conflitos">Apenas conflitos</option>
+                <option value="Validos">Apenas regulares</option>
+              </select>
             </div>
-
-            <select
-              value={filtroTipo}
-              onChange={(e) =>
-                setFiltroTipo(e.target.value as TipoAfastamento | 'Todos')
-              }
-              aria-label="Filtrar por tipo de afastamento"
-              className="max-w-[195px] px-2.5 py-1.5 text-xs border border-slate-300 rounded-md bg-white text-slate-800 focus:outline-none focus:border-[#1E3A5F]"
-            >
-              <option value="Todos">Todos os tipos</option>
-              {TIPOS_AFASTAMENTO_LISTA.map((t) => (
-                <option key={t} value={t}>
-                  {t}
-                </option>
-              ))}
-            </select>
-
-            <select
-              value={filtroEquipe}
-              onChange={(e) => setFiltroEquipe(e.target.value as Equipe | 'Todas')}
-              aria-label="Filtrar por equipe"
-              className="px-2.5 py-1.5 text-xs border border-slate-300 rounded-md bg-white text-slate-800 focus:outline-none focus:border-[#1E3A5F]"
-            >
-              <option value="Todas">Todas as equipes</option>
-              {EQUIPES_LISTA.map((eq) => (
-                <option key={eq} value={eq}>
-                  {eq === 'Terceirizado' ? 'Terceirizados' : `Equipe ${eq}`}
-                </option>
-              ))}
-            </select>
-
-            <select
-              value={filtroCargo}
-              onChange={(e) => setFiltroCargo(e.target.value as Cargo | 'Todos')}
-              aria-label="Filtrar por cargo"
-              className="px-2.5 py-1.5 text-xs border border-slate-300 rounded-md bg-white text-slate-800 focus:outline-none focus:border-[#1E3A5F]"
-            >
-              <option value="Todos">Todos os cargos</option>
-              {CARGOS_LISTA.map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
-              ))}
-            </select>
-
-            <select
-              value={anoSelecionado}
-              onChange={(e) => setAnoSelecionado(Number(e.target.value))}
-              aria-label="Ano do cronograma"
-              className="px-2.5 py-1.5 text-xs font-mono font-medium border border-slate-300 rounded-md bg-white text-slate-800 focus:outline-none focus:border-[#1E3A5F]"
-            >
-              {anosDisponiveis.map((ano) => (
-                <option key={ano} value={ano}>
-                  Ano {ano}
-                </option>
-              ))}
-            </select>
-
-            <select
-              value={filtroStatus}
-              onChange={(e) =>
-                setFiltroStatus(e.target.value as 'Todos' | 'Conflitos' | 'Validos')
-              }
-              aria-label="Filtrar por situação"
-              className="px-2.5 py-1.5 text-xs border border-slate-300 rounded-md bg-white text-slate-800 focus:outline-none focus:border-[#1E3A5F]"
-            >
-              <option value="Todos">Todas as situações</option>
-              <option value="Conflitos">Apenas conflitos</option>
-              <option value="Validos">Apenas regulares</option>
-            </select>
-          </div>
+          ) : (
+            <div className="text-xs text-slate-600 px-1">
+              Módulo de Convocações · Escala 24x72 (08:00 às 08:00) · Turnos de 12h
+            </div>
+          )}
         </section>
 
         {/* Legend bar + active filter count indicator */}
-        <div className="flex flex-wrap items-center justify-between gap-4 text-xs text-slate-600 px-1">
-          <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
-            {TIPOS_AFASTAMENTO_LISTA.map((tipo) => {
-              const st = getLeaveVisualStyle(tipo);
-              return (
-                <div key={tipo} className="flex items-center gap-2">
-                  <span
-                    className={`inline-block w-4 h-3 rounded-sm border ${st.swatchClass}`}
-                  />
-                  <span>{st.label}</span>
-                </div>
-              );
-            })}
-            <div className="flex items-center gap-2">
-              <span className="inline-block w-4 h-3 rounded-sm bg-[#FEE2E2] border border-[#DC2626]" />
-              <span>Conflito operacional</span>
+        {activeTab !== 'escala' && (
+          <div className="flex flex-wrap items-center justify-between gap-4 text-xs text-slate-600 px-1">
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+              {TIPOS_AFASTAMENTO_LISTA.map((tipo) => {
+                const st = getLeaveVisualStyle(tipo);
+                return (
+                  <div key={tipo} className="flex items-center gap-2">
+                    <span
+                      className={`inline-block w-4 h-3 rounded-sm border ${st.swatchClass}`}
+                    />
+                    <span>{st.label}</span>
+                  </div>
+                );
+              })}
+              <div className="flex items-center gap-2">
+                <span className="inline-block w-4 h-3 rounded-sm bg-[#FEE2E2] border border-[#DC2626]" />
+                <span>Conflito operacional</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="inline-block w-4 h-3 rounded-sm bg-vedado-hatch border border-slate-300" />
+                <span>Meses vedados p/ férias (Jan, Fev e Dez)</span>
+              </div>
             </div>
-            <div className="flex items-center gap-2">
-              <span className="inline-block w-4 h-3 rounded-sm bg-vedado-hatch border border-slate-300" />
-              <span>Meses vedados p/ férias (Jan, Fev e Dez)</span>
-            </div>
-          </div>
 
-          {hasActiveFilters && (
-            <div className="flex items-center gap-2 text-xs text-slate-700">
-              <span className="font-mono tabular-nums">
-                Exibindo {servidoresAgrupados.length} de {totalServidoresUnicos} servidor(es)
-              </span>
-              <button
-                type="button"
-                onClick={() => {
-                  setFiltroEquipe('Todas');
-                  setFiltroCargo('Todos');
-                  setFiltroTipo('Todos');
-                  setFiltroStatus('Todos');
-                  setBuscaServidor('');
-                }}
-                className="text-[#1E3A5F] font-medium hover:underline"
-              >
-                Limpar filtros
-              </button>
-            </div>
-          )}
-        </div>
+            {hasActiveFilters && (
+              <div className="flex items-center gap-2 text-xs text-slate-700">
+                <span className="font-mono tabular-nums">
+                  Exibindo {servidoresAgrupados.length} de {totalServidoresUnicos} servidor(es)
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFiltroEquipe('Todas');
+                    setFiltroCargo('Todos');
+                    setFiltroTipo('Todos');
+                    setFiltroStatus('Todos');
+                    setBuscaServidor('');
+                  }}
+                  className="text-[#1E3A5F] font-medium hover:underline"
+                >
+                  Limpar filtros
+                </button>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Active View */}
         {activeTab === 'cronograma' && (
@@ -951,6 +1549,39 @@ export default function App() {
           />
         )}
 
+        {activeTab === 'escala' && (
+          <EscalaMensalView
+            lancamentos={lancamentosAvaliados}
+            ano={escalaAno}
+            mes={escalaMes}
+            anosDisponiveis={anosDisponiveis}
+            onChangeAno={setEscalaAno}
+            onChangeMes={setEscalaMes}
+            escalaMap={escalaMap}
+            onUpdateSlot={handleUpdateEscalaSlot}
+            delegados={delegados}
+            connectedDelegadosSheet={connectedDelegadosSheet}
+            connectedEscalaSheet={connectedEscalaSheet}
+            hasGoogleToken={hasToken}
+            isAutoSavingEscala={isAutoSavingEscala}
+            onOpenDelegadosModal={() => {
+              setIsDelegadosModalOpen(true);
+              if (hasToken) void loadDriveFiles();
+            }}
+            onOpenEscalaSheetsModal={() => {
+              setIsEscalaSheetsModalOpen(true);
+              if (hasToken) void loadDriveFiles();
+            }}
+            onRequestSaveEscalaToSheet={handleRequestSaveEscalaToSheet}
+            onReloadAllEscalasFromSheet={() => {
+              void handleReloadAllEscalasFromSheet();
+            }}
+            isBusySheet={isBusySheet}
+            onEditLancamento={openEditLancamento}
+            onNotify={setFeedbackMessage}
+          />
+        )}
+
         {activeTab === 'regras' && (
           <RulesView
             lancamentos={lancamentosAvaliados}
@@ -1002,6 +1633,75 @@ export default function App() {
         onSelectSpreadsheetId={handleSelectSpreadsheet}
         onCreateSpreadsheet2027={handleCreateSpreadsheet2027}
         onReloadConnectedSheet={handleReloadConnectedSheet}
+      />
+
+      <DelegadosModal
+        isOpen={isDelegadosModalOpen}
+        onClose={() => setIsDelegadosModalOpen(false)}
+        delegados={delegados}
+        user={user}
+        hasToken={hasToken}
+        isSigningIn={isSigningIn}
+        onSignIn={handleSignIn}
+        connectedSheet={connectedDelegadosSheet}
+        driveFiles={driveFiles}
+        isLoadingFiles={isLoadingFiles}
+        isBusySheet={isBusySheet}
+        errorMessage={sheetError}
+        onRefreshDriveFiles={() => loadDriveFiles()}
+        onSelectSpreadsheetId={(id, tab) => {
+          void handleSelectDelegadosSpreadsheet(id, tab);
+        }}
+        onCreateDelegadosSpreadsheet={() => {
+          void handleCreateDelegadosSpreadsheet();
+        }}
+        onReloadConnectedSheet={() => {
+          if (connectedDelegadosSheet) {
+            void handleSelectDelegadosSpreadsheet(
+              connectedDelegadosSheet.spreadsheetId,
+              connectedDelegadosSheet.sheetTitle
+            );
+          }
+        }}
+        onRequestAddDelegado={(d) => handleRequestDelegadoMutation('create', d)}
+        onRequestUpdateDelegado={(d) => handleRequestDelegadoMutation('update', d)}
+        onRequestDeleteDelegado={(d) => handleRequestDelegadoMutation('delete', d)}
+      />
+
+      <EscalaSheetsModal
+        isOpen={isEscalaSheetsModalOpen}
+        onClose={() => setIsEscalaSheetsModalOpen(false)}
+        user={user}
+        hasToken={hasToken}
+        isSigningIn={isSigningIn}
+        onSignIn={handleSignIn}
+        connectedEscalaSheet={connectedEscalaSheet}
+        driveFiles={driveFiles}
+        isLoadingFiles={isLoadingFiles}
+        isBusySheet={isBusySheet}
+        errorMessage={sheetError}
+        onRefreshDriveFiles={() => loadDriveFiles()}
+        onSelectSpreadsheetId={(id) => {
+          void handleSelectEscalaSpreadsheet(id);
+        }}
+        onCreateEscalaSpreadsheet={() => {
+          void handleCreateEscalaSpreadsheet();
+        }}
+        onReloadAllMonths={() => {
+          void handleReloadAllEscalasFromSheet();
+        }}
+      />
+
+      <ConfirmDelegadoOrEscalaModal
+        pending={pendingEscalaOrDelegadoMutation}
+        isSubmitting={isMutatingEscala}
+        onConfirm={() => {
+          void executeConfirmedEscalaOrDelegadoMutation();
+        }}
+        onCancel={() => {
+          setPendingEscalaOrDelegadoMutation(null);
+          setPendingEscalaSaveGrade(null);
+        }}
       />
     </div>
   );

@@ -169,7 +169,7 @@ export const SheetsConnectModal: React.FC<SheetsConnectModalProps> = ({
                       </svg>
                     </div>
                     <span>
-                      {isSigningIn ? 'Autenticando...' : 'Sign in with Google'}
+                      {isSigningIn ? 'Autenticando...' : 'Entrar com Google'}
                     </span>
                   </div>
                 </button>

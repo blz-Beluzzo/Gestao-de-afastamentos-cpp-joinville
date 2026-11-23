@@ -1,6 +1,6 @@
 {
-  "name": "Remix Gestão de Afastamentos — CPP Joinville (2027)",
-  "description": "Sistema institucional de gestão, controle e validação automática da programação de férias e demais afastamentos da CPP Joinville (2027), integrado ao Google Drive e Google Sheets.",
+  "name": "Gestão de Servidores — CPP Joinville (2027)",
+  "description": "Sistema institucional de gestão, controle e validação automática da programação de férias, registro de afastamentos e convocações da CPP Joinville (2027), integrado ao Google Drive e Google Sheets.",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
