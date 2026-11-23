@@ -1,6 +1,6 @@
-# Gestão de Férias — CPP Joinville
+# Controle de Afastamentos — CPP Joinville
 
-Aplicação web para planejamento, visualização e validação automática da escala anual de férias dos servidores da CPP Joinville, com sincronização direta em planilhas do **Google Sheets** por meio da conta Google da unidade.
+Aplicação web para planejamento, visualização e validação automática da escala de afastamentos dos servidores e colaboradores da CPP Joinville (**Férias**, **Licença-Prêmio**, **Curso/Convocação** e **Afastamento Médico (LTS/LTF)**), com sincronização direta em planilhas do **Google Sheets** por meio da conta Google da unidade.
 
 ---
 
@@ -19,7 +19,7 @@ flowchart LR
     User["Navegador do Usuário<br/>(Frontend React)"] -->|1. Acessa a página| GHP
     User -->|2. Faz login Google OAuth| FB["Firebase Authentication<br/>(Autenticação e autorização)"]
     FB -->|3. Retorna token temporário<br/>em memória| User
-    User <-->|4. Lê e grava férias diretamente| GS["Google Drive e Google Sheets<br/>(Armazenamento oficial dos dados)"]
+    User <-->|4. Lê e grava afastamentos diretamente| GS["Google Drive e Google Sheets<br/>(Armazenamento oficial dos dados)"]
 ```
 
 ### Papel de cada serviço
@@ -29,13 +29,13 @@ flowchart LR
 | **GitHub** | Onde o código-fonte do projeto fica armazenado, organizado e versionado (histórico de alterações). |
 | **GitHub Actions** | A esteira automática que, a cada alteração enviada para o GitHub, instala as dependências, compila a aplicação e prepara os arquivos finais do site. |
 | **GitHub Pages** | O serviço de hospedagem estática que disponibiliza a aplicação na internet para ser acessada pelo navegador, sem necessidade de contratar servidor próprio. |
-| **Firebase (Authentication)** | Responsável exclusivamente pela autenticação dos usuários com a conta Google (OAuth 2.0) e pela emissão da autorização temporária para acessar o Google Drive e o Google Sheets. **Não armazena dados de férias.** |
-| **Google Sheets (e Google Drive)** | Onde os dados efetivos e oficiais da gestão (servidores, equipes, cargos e períodos de férias) ficam armazenados, protegidos pelas permissões de compartilhamento da própria conta Google da unidade. |
+| **Firebase (Authentication)** | Responsável exclusivamente pela autenticação dos usuários com a conta Google (OAuth 2.0) e pela emissão da autorização temporária para acessar o Google Drive e o Google Sheets. **Não armazena dados da escala.** |
+| **Google Sheets (e Google Drive)** | Onde os dados efetivos e oficiais da gestão (servidores, equipes, cargos, tipos e períodos de afastamento) ficam armazenados, protegidos pelas permissões de compartilhamento da própria conta Google da unidade. |
 
 ### Três características essenciais da arquitetura
 
 1. **Execução no navegador (Frontend):** toda a interface, os filtros, os gráficos de cronograma e as regras de verificação de conflitos rodam diretamente no navegador do usuário.
-2. **Sem backend próprio:** não existe nenhum servidor intermediário, banco de dados paralelo ou API própria guardando cópias das férias da delegacia.
+2. **Sem backend próprio:** não existe nenhum servidor intermediário, banco de dados paralelo ou API própria guardando cópias dos afastamentos da delegacia.
 3. **Comunicação direta com o Google:** depois do login, o navegador conversa diretamente com as APIs oficiais do Google (`Drive` e `Sheets`) usando a autorização concedida pelo usuário autenticado.
 
 ---
@@ -66,36 +66,46 @@ flowchart LR
 
 ## Principais Funcionalidades
 
-- **Cronograma Anual (Timeline):** visão de 12 meses por servidor, com seletor dinâmico de ano, filtros por equipe (`Alfa`, `Bravo`, `Charlie`, `Delta`, `Volante`, `Coordenação`), cargo (`Delegado`, `Escrivão`, `Agente`), situação (`Válido` / `Conflito`) e busca por nome.
-- **Calendário Mensal:** grade diária mostrando quais servidores estão afastados em cada data do mês selecionado.
+- **Múltiplos Tipos de Afastamento:**
+  - Suporte nativo a **Férias**, **Licença-Prêmio**, **Curso/Convocação** e **Afastamento Médico (LTS/LTF)**, cada um identificado por cor própria no cronograma, no calendário mensal e nos relatórios exportados.
+  - Lançamentos ilimitados por servidor (agrupados automaticamente na linha do servidor na timeline anual).
+- **Seção Dedicada para Terceirizados:**
+  - Exibição em bloco separado dos servidores policiais (`Alfa`, `Bravo`, `Charlie`, `Delta`, `Volante`, `Coordenação`), sem aplicar regras de conflito da escala policial aos colaboradores terceirizados.
+- **Cronograma Anual (Timeline):**
+  - Visão de 12 meses por servidor/colaborador, com seletor dinâmico de ano, atalho para adicionar novo afastamento diretamente na linha do servidor e filtros combináveis por **Tipo de Afastamento**, **Equipe**, **Cargo**, **Situação** (`Regulares` / `Conflitos`) e **Busca por nome**.
+- **Calendário Mensal:**
+  - Grade diária mostrando todos os servidores afastados em cada data do mês selecionado, com destaque visual para conflitos e painel lateral para consulta por dia específico.
 - **Motor de Validação Operacional em Cascata:**
-  1. **Meses vedados:** bloqueia períodos que atinjam **Janeiro**, **Fevereiro** ou **Dezembro**.
-  2. **Mesmo cargo na mesma equipe:** impede férias coincidentes de dois servidores do mesmo cargo dentro da mesma equipe.
-  3. **Delegado e Escrivão:** impede que Delegado e Escrivão da mesma equipe coincidam períodos de afastamento.
-  4. **Consistência de datas:** valida intervalos e impede sobreposição entre o 1º e o 2º período do mesmo servidor.
+  1. **Meses vedados para férias:** bloqueia períodos de **Férias** de servidores policiais que atinjam **Janeiro**, **Fevereiro** ou **Dezembro**. Outros tipos de afastamento (`Licença-Prêmio`, `Curso/Convocação` e `Afastamento Médico (LTS/LTF)`) são permitidos nesses meses.
+  2. **Mesmo cargo na mesma equipe:** impede afastamentos coincidentes (de qualquer tipo) entre dois servidores policiais do mesmo cargo na mesma equipe.
+  3. **Delegado e Escrivão:** impede que Delegado e Escrivão da mesma equipe coincidam períodos de afastamento (de qualquer tipo).
+  4. **Sobreposição própria e consistência de datas:** valida datas de início/término e impede sobreposição entre lançamentos do mesmo servidor.
 - **Gestão Assistida com Planilha Google:**
-  - Seleção de planilha e aba existentes no Google Drive ou criação automática da planilha padrão `Programacao_de_Ferias_CPP_2027`.
+  - Seleção de planilha e aba existentes no Google Drive, vínculo por URL/ID ou criação automática da planilha padrão `Controle_de_Afastamentos_CPP_Joinville` (aba `Afastamentos 2027`).
+  - Reconexão automática à última planilha utilizada vinculada separadamente por conta Google autenticada.
   - Confirmação explícita em modal antes de gravar, atualizar ou excluir linhas na planilha oficial.
-- **Exportação de Relatórios:** geração local de arquivo `.csv` (compatível com Excel) e relatório `.html` autônomo com o detalhamento de conflitos.
+- **Exportação de Relatórios:**
+  - Geração local de arquivo `.csv` (compatível com Excel) e relatório `.html` autônomo com tipo de afastamento, duração e detalhamento de conflitos.
 
 ---
 
 ## Estrutura Esperada na Planilha (Google Sheets)
 
+### Formato padrão (1 lançamento por linha)
+
+A aplicação trata a linha 1 (ou a linha de cabeçalho detectada) como cabeçalho e lê/grava os lançamentos a partir da **linha 2**:
+
 | Coluna | Descrição |
 | --- | --- |
-| `Equipe` | `Alfa`, `Bravo`, `Charlie`, `Delta`, `Volante` ou `Coordenação` |
-| `Servidor` | Nome do servidor |
-| `Cargo` | `Delegado`, `Escrivão` ou `Agente` |
-| `Início – período 1` | Data inicial do 1º período (`DD/MM/AAAA` ou `AAAA-MM-DD`) |
-| `Fim – período 1` | Data final do 1º período |
-| `Dias – período 1` | Quantidade de dias (calculada ou fórmula) |
-| `Início – período 2` | Data inicial do 2º período |
-| `Fim – período 2` | Data final do 2º período |
-| `Dias – período 2` | Quantidade de dias (calculada ou fórmula) |
-| `Total de dias` | Soma dos períodos |
+| `Equipe` | `Alfa`, `Bravo`, `Charlie`, `Delta`, `Volante`, `Coordenação` ou `Terceirizado` |
+| `Servidor` | Nome do servidor ou colaborador |
+| `Cargo` | `Delegado`, `Escrivão`, `Agente` ou `Terceirizado` |
+| `Tipo de Afastamento` | `Férias`, `Licença-Prêmio`, `Curso/Convocação` ou `Afastamento Médico (LTS/LTF)` |
+| `Início` | Data inicial do afastamento (`DD/MM/AAAA` ou `AAAA-MM-DD`) |
+| `Fim` | Data final do afastamento (`DD/MM/AAAA` ou `AAAA-MM-DD`) |
+| `Dias` | Quantidade de dias corridos (inclusivo) |
 
-> O leitor também aceita variações de cabeçalho em português (como `Plantão`, `Policial`, `Função`, `Término 1/2`), linhas de título antes do cabeçalho e abas sem linha de cabeçalho.
+> **Compatibilidade:** o leitor também reconhece variações de cabeçalho em português (como `Plantão`, `Setor`, `Policial`, `Função`, `Afastamento`, `Motivo/Categoria`, `Data inicial do Afastamento`, `Data final do Afastamento`), suporta linhas de título antes do cabeçalho e mantém compatibilidade retroativa com planilhas legadas que utilizam 2 períodos na mesma linha (`Início – período 1/2`, `Fim – período 1/2`).
 
 ---
 
